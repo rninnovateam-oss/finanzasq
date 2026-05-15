@@ -2,8 +2,18 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>FinanzasQ2</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>FinanzasQ</title>
+<!-- PWA -->
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#f0b429">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="FinanzasQ">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="description" content="Control financiero personal — deudas, ahorros y presupuesto quincenal">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%230c1117'/><text y='.9em' font-size='72' x='12'>💰</text></svg>">
+<link rel="apple-touch-icon" href="icon-192.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -209,10 +219,11 @@ details summary::-webkit-details-marker{display:none}
 
 /* ── RESPONSIVE ── */
 @media(max-width:768px){
-  .topbar{padding:0 16px;gap:0}
+  .topbar{padding:0 16px;gap:0;padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right))}
   .topbar-nav{display:none}
   .mobile-nav-bar{display:flex!important}
-  .main{padding:14px 16px 80px}
+  .main{padding:14px 16px calc(68px + env(safe-area-inset-bottom))}
+  .mobile-nav-bar{height:calc(58px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom)}
   .period-bar{padding:14px 16px 0}
   .cards-grid{grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
   .two-col{grid-template-columns:1fr}
@@ -649,8 +660,8 @@ function blobDL(wb,name){
 }
 
 async function autoSave(){
+  saveToLS(); // always backup to localStorage (keeps data on mobile / between sessions)
   if(S.fileHandle){
-    // Write directly to the same file on disk — no dialog, no user action needed
     try{
       const buf=XLSX.write(buildWB(),{bookType:'xlsx',type:'array'});
       const w=await S.fileHandle.createWritable();
@@ -659,14 +670,12 @@ async function autoSave(){
       S.unsaved=false; updateBadge();
     }catch(e){
       console.error('AutoSave:',e);
-      // Permission may have been revoked — try to recover via IDB
-      saveToLS(); S.unsaved=false; updateBadge();
       toast('⚠ No se pudo guardar en archivo',true);
+      S.unsaved=false; updateBadge();
     }
     return;
   }
-  // No file handle: use localStorage
-  saveToLS(); S.unsaved=false; updateBadge();
+  S.unsaved=false; updateBadge();
 }
 
 function manualDL(){ blobDL(buildWB(),S.fileName||'mis_finanzas.xlsx');S.unsaved=false;updateBadge();toast('Archivo descargado ✓'); }
@@ -1575,17 +1584,31 @@ function toast(msg,err){
   clearTimeout(_tt);_tt=setTimeout(()=>el.style.display='none',3200);
 }
 
+// ── PWA: Register service worker for offline + install support ──
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch(() => {});
+  });
+}
+
 loadGroqKey();
-// On startup: try to silently reconnect to the last used .xlsx file via IndexedDB.
-// If the handle is found and permission is granted, loads data and goes straight to the app.
-// Otherwise shows the welcome screen.
 (async () => {
+  // 1. Try to reconnect to last used .xlsx file (PC with Chrome/Edge)
   const restored = await tryRestoreHandle();
-  if (restored) {
+  if (restored) { renderApp(); return; }
+
+  // 2. Fallback: restore from localStorage (mobile / no file system access)
+  loadFromLS();
+  const hasData = S.entries.filter(e => e.tipo !== 'saldo').length > 0;
+  if (hasData) {
+    S.fileName = localStorage.getItem('fq_fname') || 'mis_finanzas.xlsx';
+    S.screen = 'app';
     renderApp();
-  } else {
-    renderWelcome();
+    return;
   }
+
+  // 3. Nothing found → welcome screen
+  renderWelcome();
 })();
 
 </script>
