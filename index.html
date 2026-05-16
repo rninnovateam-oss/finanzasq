@@ -704,17 +704,22 @@ function savingsGoals(){
   return Object.values(map).sort((a,b)=>b.total-a.total);
 }
 function computeTotals(){
-  const ing=getPeriodIngresos(),aho=getPeriodAhorros(),deu=getDeudas();
-  const tI=ing.reduce((s,e)=>s+e.monto,0),tA=aho.reduce((s,e)=>s+e.monto,0),tD=deu.reduce((s,e)=>s+e.monto,0);
-  const tPaid=deu.filter(d=>d.paid).reduce((s,e)=>s+e.monto,0),tPend=deu.filter(d=>!d.paid).reduce((s,e)=>s+e.monto,0);
-  const tAportadoTotal=deu.filter(d=>!d.paid).reduce((s,d)=>s+d._totalAportado,0);
-  const saldo=getSaldoActual(), hasSaldo=getSaldoEntry()!==null;
-  // Con saldo registrado: balDisp = saldo real (ya actualizado por cada acción automáticamente)
-  //                       balProy = cuánto quedaría pagando todo lo pendiente
-  // Sin saldo: cálculo por período (modo básico)
-  const balDisp=hasSaldo?saldo:(tI-tPaid-tA-tApartado);
-  const balProy=hasSaldo?R2(saldo-tPend):(tI-tD-tA);
-  return{ing,aho,deu,tI,tA,tD,tPaid,tPend,tAportadoTotal,saldo,hasSaldo,balDisp,balProy};
+  try{
+    const ing=getPeriodIngresos()||[],aho=getPeriodAhorros()||[],deu=getDeudas()||[];
+    const tI=ing.reduce((s,e)=>s+(e.monto||0),0);
+    const tA=aho.reduce((s,e)=>s+(e.monto||0),0);
+    const tD=deu.reduce((s,e)=>s+(e.monto||0),0);
+    const tPaid=deu.filter(d=>d.paid).reduce((s,e)=>s+(e.monto||0),0);
+    const tPend=deu.filter(d=>!d.paid).reduce((s,e)=>s+(e.monto||0),0);
+    const tAportadoTotal=deu.filter(d=>!d.paid).reduce((s,d)=>s+(d._totalAportado||0),0);
+    const saldo=getSaldoActual(), hasSaldo=getSaldoEntry()!==null;
+    const balDisp=hasSaldo?saldo:(tI-tPaid-tA);
+    const balProy=hasSaldo?R2(saldo-tPend):(tI-tD-tA);
+    return{ing,aho,deu,tI,tA,tD,tPaid,tPend,tAportadoTotal,saldo,hasSaldo,balDisp,balProy};
+  }catch(err){
+    console.error('computeTotals error:',err);
+    return{ing:[],aho:[],deu:[],tI:0,tA:0,tD:0,tPaid:0,tPend:0,tAportadoTotal:0,saldo:0,hasSaldo:false,balDisp:0,balProy:0};
+  }
 }
 
 function canAfford(amount){
@@ -856,14 +861,19 @@ async function createFile(){
     try{
       const h=await window.showSaveFilePicker({suggestedName:'mis_finanzas.xlsx',types:[{description:'Excel (.xlsx)',accept:{'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet':['.xlsx']}}]});
       S.entries=[]; S.fileHandle=h; S.fileName=h.name; S.screen='app'; S.unsaved=false;
-      await idbSave(h); // ← remember file for next session
+      await idbSave(h);
+      saveToLS();
       await autoSave(); renderApp();
-    }catch(e){if(e.name!=='AbortError')toast('Error al crear archivo',true);}
-  }else{
-    S.entries=[]; S.fileName='mis_finanzas.xlsx'; S.screen='app'; S.unsaved=false;
-    saveToLS(); renderApp();
-    toast('Guardado en navegador. Usa "Exportar" para tener una copia .xlsx.');
+      return;
+    }catch(e){
+      // AbortError = usuario canceló. Cualquier otro error = fallback a LS.
+      console.warn('File picker:',e.name,e.message);
+    }
   }
+  // Fallback: usar localStorage (siempre funciona)
+  S.entries=[]; S.fileName='mis_finanzas.xlsx'; S.screen='app'; S.unsaved=false;
+  saveToLS(); renderApp();
+  toast('Archivo nuevo listo. Usá ⚙️ → Exportar para guardar como .xlsx.');
 }
 
 async function changeFile(){
@@ -1250,8 +1260,9 @@ function renderWelcome(){
       </p>
       <div style="display:flex;flex-direction:column;gap:10px">
         <button class="btn btn-primary" onclick="openFile()" style="width:100%;justify-content:center;padding:13px;font-size:.95rem">📂 Abrir archivo existente</button>
-        <button class="btn btn-ghost" onclick="createFile()" style="width:100%;justify-content:center;padding:13px;font-size:.95rem">✨ Crear archivo nuevo</button>
+        <button class="btn btn-ghost" onclick="createFile()" style="width:100%;justify-content:center;padding:13px;font-size:.95rem">✨ Empezar desde cero</button>
       </div>
+      <p style="margin-top:12px;font-size:.76rem;color:var(--t2);text-align:center;line-height:1.5">Al empezar desde cero los datos se guardan en el navegador.<br>Exportá el .xlsx cuando quieras desde ⚙️ Configuración.</p>
     </div>
   </div>`;
 }
@@ -1265,13 +1276,23 @@ function switchTab(id){
 
 function renderTab(id){
   const el=document.getElementById('main-content');if(!el)return;
-  const t=computeTotals();
-  if(id==='home') el.innerHTML=homeHTML(t);
-  else if(id==='pagos') el.innerHTML=pagosHTML(t);
-  else if(id==='deudas') el.innerHTML=deudasHTML(t);
-  else if(id==='ahorros') el.innerHTML=ahorrosHTML();
-  else el.innerHTML=iaHTML();
-  updateBadge(); // keep topbar balance in sync
+  try{
+    const t=computeTotals();
+    if(id==='home') el.innerHTML=homeHTML(t);
+    else if(id==='pagos') el.innerHTML=pagosHTML(t);
+    else if(id==='deudas') el.innerHTML=deudasHTML(t);
+    else if(id==='ahorros') el.innerHTML=ahorrosHTML();
+    else el.innerHTML=iaHTML();
+  }catch(err){
+    console.error('renderTab error:',err);
+    el.innerHTML=`<div style="padding:24px;text-align:center;color:var(--t2)">
+      <div style="font-size:1.5rem;margin-bottom:12px;opacity:.3">⚠️</div>
+      <div style="font-size:.9rem;color:var(--t1);margin-bottom:8px">Error al renderizar</div>
+      <div style="font-size:.78rem;color:var(--t2);margin-bottom:16px">${err.message}</div>
+      <button class="btn btn-ghost btn-sm" onclick="renderTab('${id}')">Reintentar</button>
+    </div>`;
+  }
+  updateBadge();
 }
 
 function updateBadge(){
