@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>FinanzasQ44</title>
+<title>FinanzasQ</title>
 <!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#f0b429">
@@ -27,7 +27,7 @@
   --font:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
   --sidebar:220px;
 }
-html,body{height:100%;background:var(--bg);font-family:var(--font);color:var(--t0);overflow-x:hidden}
+html,body{height:100%;background:var(--bg);font-family:var(--font);color:var(--t0)}
 ::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--b3);border-radius:3px}
 
 /* ── App shell ── */
@@ -219,43 +219,21 @@ details summary::-webkit-details-marker{display:none}
 
 /* ── RESPONSIVE ── */
 @media(max-width:768px){
-  .topbar{padding:0 12px;gap:0;padding-left:max(12px,env(safe-area-inset-left));padding-right:max(12px,env(safe-area-inset-right))}
+  .topbar{padding:0 16px;gap:0;padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right))}
   .topbar-nav{display:none}
   .mobile-nav-bar{display:flex!important}
-  .main{padding:12px 12px calc(64px + env(safe-area-inset-bottom));max-width:100%}
-  .mobile-nav-bar{height:calc(56px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom)}
-  .period-bar{padding:12px 12px 0}
-  .cards-grid{grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+  .main{padding:14px 16px calc(68px + env(safe-area-inset-bottom))}
+  .mobile-nav-bar{height:calc(58px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom)}
+  .period-bar{padding:14px 16px 0}
+  .cards-grid{grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
   .two-col{grid-template-columns:1fr}
   .three-col{grid-template-columns:1fr 1fr}
   .form-row{grid-template-columns:1fr}
-  .sc-val{font-size:1rem}
-  .sc-lbl{font-size:.6rem}
-  .modal{padding:18px 14px;max-height:90vh;overflow-y:auto}
-  .ai-bubble.user{margin-left:5%}
-  .ai-bubble.bot{margin-right:5%}
+  .sc-val{font-size:1.1rem}
+  .modal{padding:22px 18px}
+  .ai-bubble.user{margin-left:8%}
+  .ai-bubble.bot{margin-right:8%}
   .amort-wrap{max-height:200px;overflow-y:auto}
-  /* Topbar balance badge: compact on mobile */
-  #balance-badge .bal-label{display:none}
-  #balance-badge{padding:5px 8px!important;gap:4px!important}
-  #balance-value{font-size:.8rem!important}
-  #save-badge{display:none!important}
-  /* Period bar: wrap nicely */
-  .period-bar-inner{flex-wrap:wrap;gap:6px}
-  /* Debt items: stack buttons on small screens */
-  .di-right{gap:5px;flex-wrap:wrap;justify-content:flex-end;max-width:130px}
-  .di-amount{font-size:.9rem!important}
-  /* Savings grid */
-  .savings-grid{grid-template-columns:1fr}
-}
-@media(max-width:400px){
-  .cards-grid{grid-template-columns:1fr 1fr;gap:6px}
-  .three-col{grid-template-columns:1fr}
-  .sc-val{font-size:.95rem}
-  .sum-card{padding:12px 12px}
-  .main{padding:10px 10px calc(60px + env(safe-area-inset-bottom))}
-  .di-right{max-width:110px}
-  .pay-btn,.unpay-btn{font-size:.72rem!important;padding:5px 8px!important}
 }
 @media(min-width:769px){
   .mobile-nav-bar{display:none!important}
@@ -532,6 +510,10 @@ function openSaldoModal(){
 
 function getDeudas(){
   const p=S.period,res=[];
+  // Helper: if in Q2 quincenal view, check if a provision was made in Q1 for this month
+  const provKeyMes=`prov-${mKey(p.mes,p.año)}`;
+  const isQ2=(p.mode==='q'&&p.q===2);
+
   S.entries.forEach(e=>{
     if(e.tipo!=='deuda') return;
     if(!e.esRecurrente){
@@ -539,11 +521,16 @@ function getDeudas(){
     } else {
       const off=mDiff(e.mesInicio,e.añoInicio,p.mes,p.año);if(off<0) return;
       if(e.esPrestamo){
-        // In mensual mode or designated quincena mode
         if(p.mode==='q'&&p.q!==targetQ(e)) return;
         const inst=getInstallmentAt(e,off);if(!inst) return;
         const key=mKey(p.mes,p.año);const pg=(e.pagos||{})[key]||{};
-        res.push({...e,_virtual:true,_key:key,_inst:inst,monto:inst.cuota,paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
+        // If we're in Q2 and user apartó in Q1, reduce by the apartado amount
+        const q1Prov=(e.provisiones||{})[provKeyMes];
+        const aportado=isQ2&&q1Prov?R2(inst.cuota/2):0;
+        const montoFinal=R2(inst.cuota-aportado);
+        res.push({...e,_virtual:true,_key:key,_inst:inst,
+          monto:montoFinal,_aportado:aportado,_montoTotal:inst.cuota,
+          paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
       } else {
         if(e.mesFin&&e.añoFin&&mDiff(e.mesInicio,e.añoInicio,e.mesFin,e.añoFin)<off) return;
         if(p.mode==='q'){
@@ -554,7 +541,13 @@ function getDeudas(){
           ? mKey(p.mes,p.año)
           : e.freq==='quincenal'?`${mKey(p.mes,p.año)}-Q${p.q}`:mKey(p.mes,p.año);
         const pg=(e.pagos||{})[key]||{};
-        res.push({...e,_virtual:true,_key:key,_inst:null,monto:e.monto,paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
+        // Same: if monthly recurrente with Q1 provision, reduce by half
+        const q1Prov=e.freq==='mensual'?(e.provisiones||{})[provKeyMes]:null;
+        const aportado=isQ2&&q1Prov?R2(e.monto/2):0;
+        const montoFinal=R2(e.monto-aportado);
+        res.push({...e,_virtual:true,_key:key,_inst:null,
+          monto:montoFinal,_aportado:aportado,_montoTotal:e.monto,
+          paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
       }
     }
   });
@@ -626,23 +619,18 @@ function parseWB(wb){
     return{id:r[0]||uid(),tipo:r[1]||'deuda',subtipo:r[2]||'simple',modalidadPrestamo:r[3]||'plazo',concepto:r[4]||'',monto:parseFloat(r[5])||0,meta:parseFloat(r[6])||0,freq:r[7]||'quincenal',q:r[8]==='1-15'?1:2,mes:MONTHS.indexOf(r[9])+1||1,año:parseInt(r[10])||NOW.getFullYear(),mesInicio:parseInt(r[11])||null,añoInicio:parseInt(r[12])||null,mesFin:parseInt(r[13])||null,añoFin:parseInt(r[14])||null,plazoMeses:parseInt(r[15])||null,capitalInicial:parseFloat(r[16])||0,tasaMensual:parseFloat(r[17])||0,cuota:parseFloat(r[18])||0,abonoFijo:parseFloat(r[19])||0,cat:r[20]||'',acreedor:r[21]||'',paid:r[22]==='Sí',notaPago:r[23]||'',fechaPago:r[24]||'',detalles:r[25]||'',pagos,provisiones,createdAt:r[27]||new Date().toISOString(),esRecurrente:r[2]==='recurrente'||r[2]==='prestamo',esPrestamo:r[2]==='prestamo'};
   });
 }
-// ── LocalStorage helpers ──
+// ── LocalStorage helpers (used when running from file://) ──
 const LS_KEY = 'fq_data_v1';
-function saveToLS(){
-  try{localStorage.setItem(LS_KEY,JSON.stringify(S.entries));if(S.fileName)localStorage.setItem('fq_fname',S.fileName);}catch{}
-  idbSaveData().catch(()=>{}); // also persist to IndexedDB (more reliable on mobile PWA)
-}
+function saveToLS(){ try{localStorage.setItem(LS_KEY,JSON.stringify(S.entries));if(S.fileName)localStorage.setItem('fq_fname',S.fileName);}catch{} }
 function loadFromLS(){ try{const d=localStorage.getItem(LS_KEY);if(d)S.entries=JSON.parse(d);}catch{} }
 
-// ── IndexedDB: persist FileSystemFileHandle + entry data across sessions ──
+// ── IndexedDB: persist FileSystemFileHandle across sessions ──
+// This means the app remembers your file — next time you open the HTML it
+// automatically reconnects to the same xlsx without asking you to navigate again.
 async function idbOpen(){
   return new Promise((res,rej)=>{
-    const req=indexedDB.open('fq_db',2);
-    req.onupgradeneeded=e=>{
-      const db=e.target.result;
-      if(!db.objectStoreNames.contains('handles'))db.createObjectStore('handles');
-      if(!db.objectStoreNames.contains('data'))db.createObjectStore('data');
-    };
+    const req=indexedDB.open('fq_db',1);
+    req.onupgradeneeded=e=>{const db=e.target.result;if(!db.objectStoreNames.contains('handles'))db.createObjectStore('handles');};
     req.onsuccess=e=>res(e.target.result);
     req.onerror=()=>rej(req.error);
   });
@@ -650,18 +638,6 @@ async function idbOpen(){
 async function idbSave(h){ try{const db=await idbOpen();const tx=db.transaction('handles','readwrite');tx.objectStore('handles').put(h,'main');}catch{} }
 async function idbLoad(){ try{const db=await idbOpen();return new Promise(res=>{const tx=db.transaction('handles','readonly');const req=tx.objectStore('handles').get('main');req.onsuccess=e=>res(e.target.result||null);req.onerror=()=>res(null);});}catch{return null;} }
 async function idbClear(){ try{const db=await idbOpen();const tx=db.transaction('handles','readwrite');tx.objectStore('handles').delete('main');}catch{} }
-// Save/load actual entry data in IDB (more reliable than localStorage on mobile PWA)
-async function idbSaveData(){
-  try{const db=await idbOpen();const tx=db.transaction('data','readwrite');tx.objectStore('data').put(JSON.stringify(S.entries),'entries');if(S.fileName)tx.objectStore('data').put(S.fileName,'fname');}catch(e){console.warn('IDB save data:',e);}
-}
-async function idbLoadData(){
-  try{
-    const db=await idbOpen();
-    const entries=await new Promise(res=>{const tx=db.transaction('data','readonly');const req=tx.objectStore('data').get('entries');req.onsuccess=e=>res(e.target.result||null);req.onerror=()=>res(null);});
-    const fname=await new Promise(res=>{const tx=db.transaction('data','readonly');const req=tx.objectStore('data').get('fname');req.onsuccess=e=>res(e.target.result||null);req.onerror=()=>res(null);});
-    return{entries,fname};
-  }catch{return{entries:null,fname:null};}
-}
 
 // Try to silently restore the last used file handle from IndexedDB.
 // Returns true if file was loaded successfully.
@@ -1063,7 +1039,7 @@ function renderApp(){
     <div class="topbar-right">
       <!-- Live balance indicator — updates after every action -->
       <div id="balance-badge" onclick="openSaldoModal()" style="cursor:pointer;display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:var(--r);background:var(--b1);border:1px solid var(--b1);transition:all .15s" title="Click para actualizar saldo">
-        <span class="bal-label" style="font-size:.68rem;color:var(--t2);text-transform:uppercase;letter-spacing:.06em">Disponible</span>
+        <span style="font-size:.68rem;color:var(--t2);text-transform:uppercase;letter-spacing:.06em">Disponible</span>
         <span id="balance-value" style="font-size:.88rem;font-weight:700;font-variant-numeric:tabular-nums">—</span>
       </div>
       <span id="save-badge" style="font-size:.72rem"></span>
@@ -1177,16 +1153,14 @@ function periodLabel(){
 
 function periodBarHTML(extra){
   const p=S.period;
-  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;flex-wrap:wrap" class="period-bar-inner">
+  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;flex-wrap:wrap">
     <div class="seg" style="flex-shrink:0">
-      <button class="seg-btn${p.mode==='q'?' on':''}" onclick="setMode('q')" style="padding:6px 10px">📅 Quincena</button>
-      <button class="seg-btn${p.mode==='mes'?' on':''}" onclick="setMode('mes')" style="padding:6px 10px">📆 Mes</button>
+      <button class="seg-btn${p.mode==='q'?' on':''}" onclick="setMode('q')" style="padding:6px 14px">📅 Quincena</button>
+      <button class="seg-btn${p.mode==='mes'?' on':''}" onclick="setMode('mes')" style="padding:6px 14px">📆 Mes</button>
     </div>
-    <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
-      <button class="btn btn-ghost btn-sm" onclick="shiftP(-1)" style="padding:6px 12px">‹</button>
-      <span style="font-size:.9rem;font-weight:600;color:var(--gold);letter-spacing:.03em;white-space:nowrap">${periodLabel()}</span>
-      <button class="btn btn-ghost btn-sm" onclick="shiftP(1)" style="padding:6px 12px">›</button>
-    </div>
+    <button class="btn btn-ghost btn-sm" onclick="shiftP(-1)" style="padding:6px 14px">‹</button>
+    <span style="font-size:.92rem;font-weight:600;color:var(--gold);letter-spacing:.04em">${periodLabel()}</span>
+    <button class="btn btn-ghost btn-sm" onclick="shiftP(1)" style="padding:6px 14px">›</button>
     ${extra||''}
   </div>`;
 }
@@ -1357,6 +1331,10 @@ function pagosHTML(t){
           ${!d.esPrestamo&&!d.esRecurrente&&d.freq==='mensual'?`<span class="pill" style="background:rgba(201,168,76,.1);color:var(--gold)">Mensual</span>`:''}
           ${d.cat&&!d.esPrestamo&&!d.esRecurrente?`<span class="pill" style="background:var(--b1);color:var(--t2)">${esc(d.cat)}</span>`:''}
         </div>
+        ${d._aportado>0?`<div style="display:flex;align-items:center;gap:8px;margin-top:5px;font-size:.74rem">
+          <span style="background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.2);color:var(--green);padding:2px 8px;border-radius:20px;font-weight:500">✓ $${d._aportado.toFixed(2)} apartado en Q1</span>
+          <span style="color:var(--t2)">· Total: ${$m(d._montoTotal)}</span>
+        </div>`:''}
       </div>
       <div class="di-right">
         <div class="di-amount" style="color:${isPaid?'var(--green)':'var(--red)'}">${$m(d.monto)}</div>
@@ -1632,53 +1610,23 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   });
 }
 
-// Mobile PWA lifecycle: guarantee data save before app is killed/backgrounded
-function _emergencySave(){
-  try{
-    if(S&&S.entries&&S.entries.length>0){
-      localStorage.setItem(LS_KEY, JSON.stringify(S.entries));
-      if(S.fileName) localStorage.setItem('fq_fname', S.fileName);
-    }
-  }catch(e){ console.warn('Emergency save:',e); }
-  if(typeof idbSaveData==='function') idbSaveData().catch(()=>{});
-}
-window.addEventListener('pagehide', _emergencySave);
-document.addEventListener('visibilitychange', ()=>{
-  if(document.visibilityState==='hidden') _emergencySave();
-});
-
 loadGroqKey();
 (async () => {
   // 1. Try to reconnect to last used .xlsx file (PC with Chrome/Edge)
   const restored = await tryRestoreHandle();
   if (restored) { renderApp(); return; }
 
-  // 2. Try IndexedDB first (most reliable on mobile PWA — survives background suspension)
-  let loadedFromIDB = false;
-  try {
-    const {entries, fname} = await idbLoadData();
-    if (entries) {
-      S.entries = JSON.parse(entries);
-      if (fname) S.fileName = fname;
-      loadedFromIDB = true;
-    }
-  } catch {}
-
-  // 3. Fallback to localStorage
-  if (!loadedFromIDB) {
-    loadFromLS();
-    if (!S.fileName) S.fileName = localStorage.getItem('fq_fname') || null;
-  }
-
-  // 4. If we have ANY stored entries (any type), restore the app
-  if (S.entries.length > 0) {
-    if (!S.fileName) S.fileName = 'mis_finanzas.xlsx';
+  // 2. Fallback: restore from localStorage (mobile / no file system access)
+  loadFromLS();
+  const hasData = S.entries.filter(e => e.tipo !== 'saldo').length > 0;
+  if (hasData) {
+    S.fileName = localStorage.getItem('fq_fname') || 'mis_finanzas.xlsx';
     S.screen = 'app';
     renderApp();
     return;
   }
 
-  // 5. Nothing found → welcome screen
+  // 3. Nothing found → welcome screen
   renderWelcome();
 })();
 
