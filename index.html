@@ -945,39 +945,74 @@ async function persist() { S.unsaved = true; await autoSave(); }
 async function saveEntry(){
   const f=S.form;
   if(!f.concepto?.trim()) return toast('El concepto es requerido',true);
-  const mod=f.modalidadPrestamo||'plazo';
-  if(f.subtipo==='prestamo'){
-    if(!f.capitalInicial||f.capitalInicial<=0) return toast('Ingresa el capital del préstamo',true);
-    if(!f.mesInicio||!f.añoInicio) return toast('Ingresa mes y año de inicio',true);
-    if(mod==='plazo'){if(!f.plazoMeses||f.plazoMeses<=0)return toast('Ingresa el plazo en meses',true);f.cuota=calcCuota(f.capitalInicial,f.tasaMensual||0,f.plazoMeses);}
-    else if(mod==='cuota'){if(!f.cuota||f.cuota<=0)return toast('Ingresa la cuota mensual',true);const p2=calcPlazo(f.capitalInicial,f.tasaMensual||0,f.cuota);if(!p2||!isFinite(p2))return toast('La cuota no cubre el interés del primer mes',true);f.plazoMeses=p2;}
-    else{if(!f.abonoFijo||f.abonoFijo<=0)return toast('Ingresa el abono mensual al capital',true);f.plazoMeses=Math.ceil(f.capitalInicial/f.abonoFijo);f.cuota=f.abonoFijo;}
-    f.monto=f.cuota;f.esRecurrente=true;f.esPrestamo=true;f.freq='mensual';f.pagos=f.pagos||{};f.mes=f.mesInicio;f.año=f.añoInicio;
-  }else if(f.subtipo==='recurrente'){
-    if(!f.monto||f.monto<=0)return toast('Ingresa el monto',true);
-    if(!f.mesInicio||!f.añoInicio)return toast('Ingresa mes y año de inicio',true);
-    f.esRecurrente=true;f.esPrestamo=false;f.pagos=f.pagos||{};f.mes=f.mesInicio;f.año=f.añoInicio;
-  }else{
-    f.monto=parseFloat(f.monto)||0;if(f.monto<=0)return toast('Ingresa un monto válido',true);
-    f.esRecurrente=false;f.esPrestamo=false;
+
+  // Detectar tipo por múltiples flags (el nuevo formulario puede setear cualquiera)
+  const isPrestamo = f.subtipo==='prestamo' || f.esPrestamo===true;
+  const isFlotante = f.freq==='flotante' || f.subtipo==='flotante';
+
+  if(isPrestamo){
+    // ── Préstamo con amortización ──────────────────────────────
+    const mod=f.modalidadPrestamo||'plazo';
+    if(!f.capitalInicial||parseFloat(f.capitalInicial)<=0)
+      return toast('Ingresá el capital del préstamo',true);
+    if(!f.mesInicio||!f.añoInicio)
+      return toast('Ingresá el mes y año de inicio',true);
+    if(mod==='plazo'){
+      if(!f.plazoMeses||parseInt(f.plazoMeses)<=0)
+        return toast('Ingresá el plazo en meses',true);
+      f.cuota=calcCuota(parseFloat(f.capitalInicial),parseFloat(f.tasaMensual)||0,parseInt(f.plazoMeses));
+    } else if(mod==='cuota'){
+      if(!f.cuota||parseFloat(f.cuota)<=0)
+        return toast('Ingresá la cuota mensual',true);
+      const p2=calcPlazo(parseFloat(f.capitalInicial),parseFloat(f.tasaMensual)||0,parseFloat(f.cuota));
+      if(!p2||!isFinite(p2)) return toast('La cuota no cubre el interés del primer mes',true);
+      f.plazoMeses=p2;
+    } else {
+      if(!f.abonoFijo||parseFloat(f.abonoFijo)<=0)
+        return toast('Ingresá el abono mensual al capital',true);
+      f.plazoMeses=Math.ceil(parseFloat(f.capitalInicial)/parseFloat(f.abonoFijo));
+      f.cuota=parseFloat(f.abonoFijo);
+    }
+    f.capitalInicial=parseFloat(f.capitalInicial);
+    f.tasaMensual=parseFloat(f.tasaMensual)||0;
+    f.cuota=R2(f.cuota);
+    f.monto=f.cuota;
+    f.subtipo='prestamo'; f.esRecurrente=true; f.esPrestamo=true; f.freq='mensual';
+    f.pagos=f.pagos||{}; f.aportes=f.aportes||{};
+    f.mes=f.mesInicio; f.año=f.añoInicio;
+
+  } else {
+    // ── Deuda simple / mensual / anual / flotante / ingreso / ahorro ──
+    f.monto=parseFloat(f.monto)||0;
+    if(f.monto<=0) return toast('Ingresá el monto',true);
+
+    if(f.tipo==='deuda'){
+      if(isFlotante){
+        f.freq='flotante'; f.subtipo='flotante'; f.esRecurrente=false; f.esPrestamo=false;
+      } else if(f.freq==='mensual'){
+        if(!f.mesInicio||!f.añoInicio) return toast('Ingresá el mes de inicio',true);
+        f.subtipo='recurrente'; f.esRecurrente=true; f.esPrestamo=false;
+        f.pagos=f.pagos||{}; f.aportes=f.aportes||{};
+        f.mes=f.mesInicio; f.año=f.añoInicio;
+      } else if(f.freq==='anual'){
+        f.subtipo=f.esRecurrente?'recurrente':'simple';
+        f.esPrestamo=false;
+        if(f.esRecurrente){f.pagos=f.pagos||{};f.aportes=f.aportes||{};f.mesInicio=f.mes;f.añoInicio=f.año;}
+      } else {
+        f.esRecurrente=false; f.esPrestamo=false;
+      }
+    }
   }
+
   const mode=S.modalMode;
-  // Set correct flags
-  if(f.tipo==='deuda'){
-    if(f.subtipo==='prestamo'){f.esRecurrente=true;f.esPrestamo=true;f.freq='mensual';}
-    else if(f.freq==='mensual'){f.esRecurrente=true;f.esPrestamo=false;f.subtipo='recurrente';}
-    else if(f.freq==='anual'&&f.esRecurrente){f.esRecurrente=true;f.esPrestamo=false;}
-    else if(f.freq==='flotante'){f.esRecurrente=false;f.esPrestamo=false;}
-    else{f.esRecurrente=false;f.esPrestamo=false;}
-  }
   if(mode==='add'){
     S.entries.push({...f,id:uid(),createdAt:new Date().toISOString(),aportes:f.aportes||{}});
     if(f.tipo==='ingreso') ajustarSaldo(+f.monto);
     if(f.tipo==='ahorro')  ajustarSaldo(-f.monto);
-  }else{
+  } else {
     const i=S.entries.findIndex(e=>e.id===f.id);if(i>=0)S.entries[i]={...f};
   }
-  await persist();closeModal();renderTab(S.tab);
+  await persist(); closeModal(); renderTab(S.tab);
   const t=computeTotals();
   const extra=t.hasSaldo&&mode==='add'?` — saldo: ${$m(t.saldo)}`:'';
   toast((mode==='add'?'Registro agregado ✓':'Cambios guardados ✓')+extra);
