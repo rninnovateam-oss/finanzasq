@@ -656,6 +656,7 @@ async function tryRestoreHandle(){
     const file=await h.getFile();
     S.entries=parseWB(XLSX.read(await file.arrayBuffer(),{type:'array'}));
     S.fileHandle=h; S.fileName=file.name; S.screen='app'; S.unsaved=false;
+    saveToLS(); // ← persistir en LS por si IDB falla la próxima vez
     return true;
   }catch(e){
     console.warn('Restore handle:',e);
@@ -704,7 +705,8 @@ async function openFile(){
       const file=await h.getFile();
       S.entries=parseWB(XLSX.read(await file.arrayBuffer(),{type:'array'}));
       S.fileHandle=h; S.fileName=file.name; S.screen='app'; S.unsaved=false;
-      await idbSave(h); // ← remember file for next session
+      saveToLS();        // ← guardar en LS al instante
+      await idbSave(h); // ← recordar archivo para próxima sesión
       renderApp();
     }catch(e){if(e.name!=='AbortError')toast('Error al abrir archivo',true);}
   }else{
