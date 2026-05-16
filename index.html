@@ -454,44 +454,62 @@ function amortTable(loan){
 //  DATA LAYER
 // ══════════════════════════════════════════
 // Helper: for a monthly item, which quincena does it belong to?
-function targetQ(e){ return e.q===1?1:2; }
+// ══════════════════════════════════════════
+//  DATA LAYER — Sistema de deudas rediseñado
+// ══════════════════════════════════════════
+//
+//  Tipos de deuda (freq):
+//  'flotante' → sin fecha, siempre visible hasta pagar
+//  'mensual'  → aparece en Q1 Y Q2, se puede aportar en cada quincena
+//  'quincenal'→ solo en su quincena asignada
+//  'anual'    → en el mes asignado cada año (Q1 y Q2 de ese mes)
+//  Préstamos  → amortización mensual, aparece en Q1 y Q2 con aportes
 
-// Does entry e match the current period p?
-function matchesPeriod(e,p){
-  if(e.año!==p.año||e.mes!==p.mes) return false;
-  if(e.freq==='anual') return true;
-  if(p.mode==='mes') return true;                          // monthly view: show all
-  if(e.freq==='mensual') return p.q===targetQ(e);          // quincenal view: one quincena only
-  return e.q===p.q;                                        // quincenal items
+// Clave de aporte por quincena específica
+function apKey(p){ return `ap-${mKey(p.mes,p.año)}-Q${p.q}`; }
+// Total aportado este mes (sumando Q1 + Q2)
+function totalAportadoMes(e, mes, año){
+  const prs=e.provisiones||{};
+  return R2(
+    (prs[`ap-${mKey(mes,año)}-Q1`]?.monto||0)+
+    (prs[`ap-${mKey(mes,año)}-Q2`]?.monto||0)
+  );
 }
 
-// Monthly debts visible in Q1 as "provision reminders" (half amount, planning only)
-// ── Provisiones (apartar en Q1 para pago mensual en Q2) ──
-function provisionKey(p){ return `prov-${mKey(p.mes,p.año)}`; }
+function matchesPeriod(e,p){
+  // Flotante: siempre visible (manejado por getDeudas directamente)
+  if(e.freq==='flotante') return false; // no usar matchesPeriod para flotantes
+  if(e.año!==p.año||e.mes!==p.mes) return false;
+  if(e.freq==='anual') return true;
+  if(p.mode==='mes') return true;
+  if(e.freq==='mensual') return true; // mensual → ambas quincenas
+  return e.q===p.q; // quincenal → solo su quincena
+}
 
 function getProvisions(){
+  // Aportes: deudas mensuales/préstamos con aporte parcial en la quincena actual
   const p=S.period;
-  if(p.mode==='mes'||p.q!==1) return [];
+  if(p.mode==='mes') return [];
   const res=[];
   S.entries.forEach(e=>{
     if(e.tipo!=='deuda') return;
-    const tq=targetQ(e);
-    if(tq!==2) return;
-    if(e.freq!=='mensual'&&!(e.esPrestamo&&e.esRecurrente)) return;
-    let active=false;
-    if(!e.esRecurrente&&e.año===p.año&&e.mes===p.mes&&e.freq==='mensual') active=true;
-    if(e.esRecurrente){
-      const off=mDiff(e.mesInicio,e.añoInicio,p.mes,p.año);
-      if(off>=0&&!(e.mesFin&&e.añoFin&&mDiff(e.mesInicio,e.añoInicio,e.mesFin,e.añoFin)<off)){
-        if(!e.esPrestamo||getInstallmentAt(e,off)) active=true;
-      }
-    }
-    if(!active) return;
-    const off2=mDiff(e.mesInicio,e.añoInicio,p.mes,p.año);
-    const fullMonto=e.esPrestamo?(getInstallmentAt(e,off2)?.cuota||0):e.monto;
-    const pk=provisionKey(p);
+    const isMensual=(e.esRecurrente&&e.freq==='mensual')||e.esPrestamo;
+    if(!isMensual) return;
+    const off=mDiff(e.mesInicio,e.añoInicio,p.mes,p.año);
+    if(off<0) return;
+    if(e.mesFin&&e.añoFin&&mDiff(e.mesInicio,e.añoInicio,e.mesFin,e.añoFin)<off) return;
+    let fullMonto=0;
+    if(e.esPrestamo){const inst=getInstallmentAt(e,off);if(!inst)return;fullMonto=inst.cuota;}
+    else{fullMonto=e.monto;}
+    const pgKey=mKey(p.mes,p.año);
+    if((e.pagos||{})[pgKey]?.pagado) return; // ya pagado este mes
+    const pk=apKey(p);
     const apartado=!!(e.provisiones||{})[pk];
-    res.push({...e,_provision:true,_fullMonto:fullMonto,monto:R2(fullMonto/2),_apartado:apartado,_pk:pk});
+    const montoApartado=((e.provisiones||{})[pk]?.monto)||0;
+    const totAp=totalAportadoMes(e,p.mes,p.año);
+    const restante=R2(Math.max(0,fullMonto-totAp));
+    const sugerido=R2(fullMonto/2);
+    res.push({...e,_provision:true,_fullMonto:fullMonto,monto:sugerido,_apartado:apartado,_pk:pk,_montoApartado:montoApartado,_totalAportado:totAp,_restante:restante});
   });
   return res;
 }
@@ -500,29 +518,92 @@ async function marcarApartado(id, pk){
   const e=S.entries.find(x=>x.id===id);if(!e)return;
   if(!e.provisiones)e.provisiones={};
   const yaApartado=!!e.provisiones[pk];
-  const off=mDiff(e.mesInicio,e.añoInicio,S.period.mes,S.period.año);
+  const p=S.period;
+  const off=mDiff(e.mesInicio,e.añoInicio,p.mes,p.año);
   const fullMonto=e.esPrestamo?(getInstallmentAt(e,off)?.cuota||0):e.monto;
-  const provMonto=R2(fullMonto/2);
+  const sugerido=R2(fullMonto/2);
   if(yaApartado){
+    const montoRestaurar=e.provisiones[pk]?.monto||sugerido;
     delete e.provisiones[pk];
-    ajustarSaldo(provMonto); // ← devuelve al saldo
+    ajustarSaldo(montoRestaurar);
     await persist(); renderTab(S.tab);
-    toast(`Apartado desmarcado — saldo restaurado${getSaldoEntry()?': '+$m(getSaldoActual()):''}`);
+    toast(`Aporte revertido — saldo restaurado${getSaldoEntry()?': '+$m(getSaldoActual()):''}`);
   } else {
-    const chk=canAfford(provMonto);
+    const chk=canAfford(sugerido);
     if(!chk.ok){
-      toast(`⚠ Saldo insuficiente para apartar ${$m(provMonto)} — disponible: ${$m(chk.disponible)} (faltan ${$m(chk.deficit)})`,true);
+      toast(`⚠ Saldo insuficiente para apartar ${$m(sugerido)} — disponible: ${$m(chk.disponible)} (faltan ${$m(chk.deficit)})`,true);
       return;
     }
-    e.provisiones[pk]={apartado:true,fecha:isoToday(),monto:provMonto};
-    ajustarSaldo(-provMonto); // ← descuenta del saldo
+    e.provisiones[pk]={apartado:true,fecha:isoToday(),monto:sugerido};
+    ajustarSaldo(-sugerido);
     await persist(); renderTab(S.tab);
-    toast(`Apartado ✓${getSaldoEntry()?' — saldo: '+$m(getSaldoActual()):''}`);
+    toast(`Aporte registrado ✓${getSaldoEntry()?' — saldo: '+$m(getSaldoActual()):''}`);
   }
 }
 
-// ══════════════════════════════════════════
-//  SALDO ACUMULATIVO — persiste para siempre, se actualiza con cada acción
+function getDeudas(){
+  const p=S.period,res=[];
+  const mes=p.mes,año=p.año;
+
+  S.entries.forEach(e=>{
+    if(e.tipo!=='deuda') return;
+
+    // ── FLOTANTE: siempre visible si no está pagada ──────────────
+    if(e.freq==='flotante'||e.subtipo==='flotante'){
+      if(!e.paid) res.push({...e,_virtual:false,_flotante:true});
+      return;
+    }
+
+    if(!e.esRecurrente){
+      // ── SIMPLE/ANUAL/QUINCENAL/MENSUAL con fecha ─────────────
+      if(e.freq==='anual'){
+        if(e.año===año&&e.mes===mes) res.push({...e,_virtual:false});
+      } else if(e.freq==='mensual'){
+        if(e.año===año&&e.mes===mes&&p.mode!=='q') res.push({...e,_virtual:false});
+        else if(e.año===año&&e.mes===mes) res.push({...e,_virtual:false}); // ambas quincenas
+      } else if(e.freq==='quincenal'){
+        if(e.año===año&&e.mes===mes&&e.q===p.q) res.push({...e,_virtual:false});
+      } else {
+        if(matchesPeriod(e,p)) res.push({...e,_virtual:false});
+      }
+    } else {
+      const off=mDiff(e.mesInicio,e.añoInicio,mes,año);if(off<0) return;
+      if(e.mesFin&&e.añoFin&&mDiff(e.mesInicio,e.añoInicio,e.mesFin,e.añoFin)<off) return;
+
+      if(e.esPrestamo){
+        // ── PRÉSTAMO: aparece en Q1 y Q2 ─────────────────────────
+        const inst=getInstallmentAt(e,off);if(!inst) return;
+        const pgKey=mKey(mes,año);const pg=(e.pagos||{})[pgKey]||{};
+        const totAp=totalAportadoMes(e,mes,año);
+        const montoFinal=R2(Math.max(0,inst.cuota-totAp));
+        res.push({...e,_virtual:true,_key:pgKey,_inst:inst,
+          monto:montoFinal,_totalAportado:totAp,_montoTotal:inst.cuota,
+          paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
+      } else {
+        // ── RECURRENTE ───────────────────────────────────────────
+        if(e.freq==='quincenal'){
+          if(p.mode==='q'&&e.q!==p.q) return; // solo su quincena
+        }
+        // mensual → ambas quincenas (no filtrar por q)
+        const key=p.mode==='mes'
+          ?mKey(mes,año)
+          :e.freq==='quincenal'?`${mKey(mes,año)}-Q${p.q}`:mKey(mes,año);
+        const pg=(e.pagos||{})[key]||{};
+        const totAp=e.freq==='mensual'?totalAportadoMes(e,mes,año):0;
+        const montoFinal=R2(Math.max(0,e.monto-totAp));
+        res.push({...e,_virtual:true,_key:key,_inst:null,
+          monto:montoFinal,_totalAportado:totAp,_montoTotal:e.monto,
+          paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
+      }
+    }
+  });
+  return res;
+}
+
+function getPeriodByType(tipo){
+  const p=S.period;
+  return S.entries.filter(e=>e.tipo===tipo&&matchesPeriod(e,p));
+}
 // ══════════════════════════════════════════
 function getSaldoEntry(){ return S.entries.find(e=>e.tipo==='saldo')||null; }
 function getSaldoActual(){ return getSaldoEntry()?.monto||0; }
@@ -874,11 +955,17 @@ async function saveEntry(){
     f.esRecurrente=false;f.esPrestamo=false;
   }
   const mode=S.modalMode;
+  // Ensure correct flags based on freq
+  if(f.tipo==='deuda'){
+    if(f.subtipo==='prestamo'){f.esRecurrente=true;f.esPrestamo=true;}
+    else if(f.freq==='flotante'){f.esRecurrente=false;f.esPrestamo=false;f.subtipo='flotante';}
+    else if(f.freq==='mensual'||f.freq==='quincenal'){f.esRecurrente=true;f.esPrestamo=false;f.subtipo='recurrente';}
+    else{f.esRecurrente=false;f.esPrestamo=false;f.subtipo='simple';}
+  }
   if(mode==='add'){
     S.entries.push({...f,id:uid(),createdAt:new Date().toISOString()});
-    // Auto-actualizar saldo acumulativo
-    if(f.tipo==='ingreso') ajustarSaldo(+f.monto);  // ingreso → saldo sube
-    if(f.tipo==='ahorro')  ajustarSaldo(-f.monto);  // ahorro  → saldo baja (lo apartás)
+    if(f.tipo==='ingreso') ajustarSaldo(+f.monto);
+    if(f.tipo==='ahorro')  ajustarSaldo(-f.monto);
   }else{
     const i=S.entries.findIndex(e=>e.id===f.id);if(i>=0)S.entries[i]={...f};
   }
@@ -966,10 +1053,11 @@ async function unmarkPaid(id,key,virtual){
 // ══════════════════════════════════════════
 function openAddModal(tipo,subtipo){
   const st=subtipo||'simple';
-  S.form={tipo,subtipo:st,concepto:'',monto:'',meta:'',freq:'mensual',q:S.period.q,mes:S.period.mes,año:S.period.año,mesInicio:S.period.mes,añoInicio:S.period.año,mesFin:null,añoFin:null,plazoMeses:'',capitalInicial:'',tasaMensual:'',cuota:0,abonoFijo:'',modalidadPrestamo:'plazo',cat:'',acreedor:'',detalles:'',paid:false,notaPago:'',fechaPago:'',pagos:{}};
+  const defaultFreq=tipo==='deuda'?(st==='prestamo'?'mensual':st==='recurrente'?'mensual':'flotante'):'quincenal';
+  S.form={tipo,subtipo:st,concepto:'',monto:'',meta:'',freq:defaultFreq,q:S.period.q,mes:S.period.mes,año:S.period.año,mesInicio:S.period.mes,añoInicio:S.period.año,mesFin:null,añoFin:null,plazoMeses:'',capitalInicial:'',tasaMensual:'',cuota:0,abonoFijo:'',modalidadPrestamo:'plazo',cat:'',acreedor:'',detalles:'',paid:false,notaPago:'',fechaPago:'',pagos:{},provisiones:{}};
   S.modalMode='add';
-  const titles={ingreso:'Nuevo Ingreso',ahorro:'Registrar Ahorro',simple:'Nueva Deuda',recurrente:'Deuda Recurrente',prestamo:'Nuevo Préstamo'};
-  document.getElementById('modal-title').textContent=tipo==='ingreso'?titles.ingreso:tipo==='ahorro'?titles.ahorro:(titles[st]||'Nuevo');
+  const titles={ingreso:'Nuevo Ingreso',ahorro:'Registrar Ahorro',deuda:'Nueva Deuda'};
+  document.getElementById('modal-title').textContent=tipo==='ingreso'?titles.ingreso:tipo==='ahorro'?titles.ahorro:titles.deuda;
   document.getElementById('modal-save').textContent='Agregar';
   renderForm();document.getElementById('modal').style.display='flex';
 }
@@ -1032,15 +1120,36 @@ function formHTML(){
   // Tipo
   h+=`<div class="form-group"><span class="lbl">Tipo</span>${seg([{v:'ingreso',l:'↑ Ingreso'},{v:'deuda',l:'⚠ Deuda'},{v:'ahorro',l:'🏦 Ahorro'}],f.tipo,"v=>sfv('tipo',v)")}</div>`;
 
+
   if(isD){
-    h+=`<div class="form-group"><span class="lbl">Tipo de deuda</span><div class="type-row">
-    <div class="tc${f.subtipo==='simple'?' on':''}" style="${f.subtipo==='simple'?'border-color:var(--red);background:rgba(248,113,113,.06);':''}" onclick="sfv('subtipo','simple')"><div class="tc-icon">💳</div><span class="tc-lbl">Simple</span><span class="tc-desc">Solo este período</span></div>
-    <div class="tc${f.subtipo==='recurrente'?' on':''}" style="${f.subtipo==='recurrente'?'border-color:var(--orange);background:rgba(251,146,60,.06);':''}" onclick="sfv('subtipo','recurrente')"><div class="tc-icon">🔄</div><span class="tc-lbl">Recurrente</span><span class="tc-desc">Se repite mensualmente</span></div>
-    <div class="tc${f.subtipo==='prestamo'?' on':''}" style="${f.subtipo==='prestamo'?'border-color:var(--purple);background:rgba(167,139,250,.06);':''}" onclick="sfv('subtipo','prestamo')"><div class="tc-icon">🏦</div><span class="tc-lbl">Préstamo</span><span class="tc-desc">Con amortización</span></div>
+    // ── Nuevo selector de tipo de deuda ────────────────────────────
+    h+=`<div class="form-group"><span class="lbl">¿Qué tipo de deuda es?</span>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px">
+      <div class="tc${f.freq==='flotante'?' on':''}" style="${f.freq==='flotante'?'border-color:var(--red);background:rgba(248,113,113,.07);':''}" onclick="sfv('freq','flotante')">
+        <div class="tc-icon">📌</div><span class="tc-lbl">Flotante</span>
+        <span class="tc-desc">Sin fecha — siempre visible hasta pagar (tarjeta, deuda personal, etc.)</span>
+      </div>
+      <div class="tc${f.freq==='mensual'&&f.subtipo!=='prestamo'?' on':''}" style="${f.freq==='mensual'&&f.subtipo!=='prestamo'?'border-color:var(--orange);background:rgba(251,146,60,.07);':''}" onclick="sfv('freq','mensual');sfv('subtipo','recurrente')">
+        <div class="tc-icon">🔄</div><span class="tc-lbl">Mensual</span>
+        <span class="tc-desc">Aparece en Q1 y Q2 cada mes. Podés aportar en cada quincena.</span>
+      </div>
+      <div class="tc${f.freq==='quincenal'?' on':''}" style="${f.freq==='quincenal'?'border-color:var(--blue);background:rgba(96,165,250,.07);':''}" onclick="sfv('freq','quincenal');sfv('subtipo','recurrente')">
+        <div class="tc-icon">📅</div><span class="tc-lbl">Quincenal</span>
+        <span class="tc-desc">Solo aparece en la quincena que elijas.</span>
+      </div>
+      <div class="tc${f.freq==='anual'?' on':''}" style="${f.freq==='anual'?'border-color:var(--gold);background:rgba(240,180,41,.07);':''}" onclick="sfv('freq','anual');sfv('subtipo','simple')">
+        <div class="tc-icon">📆</div><span class="tc-lbl">Anual</span>
+        <span class="tc-desc">El mismo mes cada año (seguro, impuestos, etc.)</span>
+      </div>
+    </div>
+    <div class="tc${f.subtipo==='prestamo'?' on':''}" style="${f.subtipo==='prestamo'?'border-color:var(--purple);background:rgba(167,139,250,.07);':''}width:100%" onclick="sfv('subtipo','prestamo');sfv('freq','mensual')">
+      <div class="tc-icon">🏦</div><span class="tc-lbl">Préstamo con amortización</span>
+      <span class="tc-desc">Cuota fija mensual calculada con interés. Podés aportar en Q1 y Q2.</span>
+    </div>
     </div></div>`;
   }
 
-  h+=`<div class="form-group"><span class="lbl">${isA?'Nombre del objetivo':'Concepto'} *</span><input id="fi-c" value="${esc(f.concepto||'')}" placeholder="${f.subtipo==='prestamo'?'Ej: Préstamo Banco Nacional':f.subtipo==='recurrente'?'Ej: Netflix, Caja...':'Ej: Tarjeta, Salario...'}"></div>`;
+  h+=`<div class="form-group"><span class="lbl">${isA?'Nombre del objetivo':'Concepto'} *</span><input id="fi-c" value="${esc(f.concepto||'')}" placeholder="${f.subtipo==='prestamo'?'Ej: Préstamo banco':f.freq==='flotante'?'Ej: Tarjeta, deuda pendiente...':f.freq==='mensual'?'Ej: Teléfono, suscripción...':'Ej: Seguro vehicular...'}"></div>`;
 
   if(isD&&f.subtipo==='prestamo'){
     const mod=f.modalidadPrestamo||'plazo',cap=parseFloat(f.capitalInicial)||0,tasa=parseFloat(f.tasaMensual)||0;
@@ -1048,48 +1157,36 @@ function formHTML(){
       <button class="seg-btn${mod==='plazo'?' on':''}" onclick="sfv('modalidadPrestamo','plazo')">📐 Plazo fijo</button>
       <button class="seg-btn${mod==='cuota'?' on':''}" onclick="sfv('modalidadPrestamo','cuota')">💳 Cuota fija</button>
       <button class="seg-btn${mod==='abono'?' on':''}" onclick="sfv('modalidadPrestamo','abono')">📉 Abono fijo</button>
-    </div>
-    <div style="font-size:.75rem;color:var(--t2);margin-top:6px;padding:8px 10px;background:var(--card2);border-radius:var(--r)">
-      ${mod==='plazo'?'Ingresás los meses → se calcula la cuota fija.':mod==='cuota'?'Ingresás cuánto podés pagar → se calcula el plazo.':'Ingresás el abono al capital → el interés baja cada mes (cuota decreciente).'}
     </div></div>`;
     h+=`<div class="loan-box"><div class="form-row">
       <div><span class="lbl">Capital prestado *</span><input id="fi-capital" type="number" step="0.01" value="${f.capitalInicial||''}" placeholder="Ej: 10000.00"></div>
-      <div><span class="lbl">Tasa interés mensual (%)</span><input id="fi-tasa" type="number" step="0.01" value="${f.tasaMensual||''}" placeholder="Ej: 1.5"></div>
+      <div><span class="lbl">Tasa mensual (%)</span><input id="fi-tasa" type="number" step="0.01" value="${f.tasaMensual||''}" placeholder="Ej: 1.5"></div>
     </div>`;
-    if(mod==='plazo'){
-      h+=`<div class="form-row" style="margin-top:12px">
-        <div><span class="lbl">Plazo (meses) *</span><input id="fi-plazo" type="number" value="${f.plazoMeses||''}" placeholder="Ej: 24"></div>
-        <div><span class="lbl">Cuota mensual (calculada)</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Pagarás</span><span style="font-weight:700;color:var(--purple)">${$m(f.cuota||0)}</span></div></div>
-      </div>`;
-    }else if(mod==='cuota'){
-      h+=`<div class="form-row" style="margin-top:12px">
-        <div><span class="lbl">Cuota que podés pagar *</span><input id="fi-cuota-inp" type="number" step="0.01" value="${f.cuota||''}" placeholder="Ej: 500.00"></div>
-        <div><span class="lbl">Plazo calculado</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Meses</span><span style="font-weight:700;color:var(--purple)">${f.plazoMeses?f.plazoMeses+' meses':'—'}</span></div></div>
-      </div>`;
-    }else{
-      h+=`<div class="form-row" style="margin-top:12px">
-        <div><span class="lbl">Abono mensual al capital *</span><input id="fi-abono" type="number" step="0.01" value="${f.abonoFijo||''}" placeholder="Ej: 100.00"></div>
-        <div><span class="lbl">Plazo estimado</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Meses</span><span style="font-weight:700;color:var(--purple)">${f.plazoMeses?f.plazoMeses+' meses':'—'}</span></div></div>
-      </div>
-      ${cap>0&&(f.abonoFijo||0)>0?`<div style="margin-top:8px;font-size:.76rem;color:var(--t2)">1° pago: <strong style="color:var(--t1)">${$m(R2((f.abonoFijo||0)+R2(cap*(tasa/100))))}</strong> · Los pagos bajan cada mes ↓</div>`:''}`;
-    }
-    if(cap>0&&(f.plazoMeses>0||f.abonoFijo>0)){
-      try{const am=amortTable({...f});h+=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--b1);text-align:center">
-        <div><div style="font-size:.63rem;color:var(--t2);margin-bottom:3px">CAPITAL</div><div style="font-weight:700;color:var(--blue)">${$m(cap)}</div></div>
-        <div><div style="font-size:.63rem;color:var(--t2);margin-bottom:3px">TOTAL INTERÉS</div><div style="font-weight:700;color:var(--red)">${$m(am.totalInteres)}</div></div>
-        <div><div style="font-size:.63rem;color:var(--t2);margin-bottom:3px">PLAZO</div><div style="font-weight:700;color:var(--purple)">${am.rows.length} meses</div></div>
-      </div>`;}catch{}
-    }
+    if(mod==='plazo'){h+=`<div class="form-row" style="margin-top:12px"><div><span class="lbl">Plazo (meses) *</span><input id="fi-plazo" type="number" value="${f.plazoMeses||''}" placeholder="Ej: 24"></div><div><span class="lbl">Cuota calculada</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Pagarás</span><span style="font-weight:700;color:var(--purple)">${$m(f.cuota||0)}</span></div></div></div>`;}
+    else if(mod==='cuota'){h+=`<div class="form-row" style="margin-top:12px"><div><span class="lbl">Cuota mensual *</span><input id="fi-cuota-inp" type="number" step="0.01" value="${f.cuota||''}" placeholder="Ej: 500.00"></div><div><span class="lbl">Plazo calculado</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Meses</span><span style="font-weight:700;color:var(--purple)">${f.plazoMeses?f.plazoMeses+' meses':'—'}</span></div></div></div>`;}
+    else{h+=`<div class="form-row" style="margin-top:12px"><div><span class="lbl">Abono al capital *</span><input id="fi-abono" type="number" step="0.01" value="${f.abonoFijo||''}" placeholder="Ej: 100.00"></div><div><span class="lbl">Plazo estimado</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Meses</span><span style="font-weight:700;color:var(--purple)">${f.plazoMeses?f.plazoMeses+' meses':'—'}</span></div></div></div>${cap>0&&(f.abonoFijo||0)>0?`<div style="margin-top:8px;font-size:.76rem;color:var(--t2)">1° pago: <strong style="color:var(--t1)">${$m(R2((f.abonoFijo||0)+R2(cap*(tasa/100))))}</strong></div>`:''}`;}
+    if(cap>0&&(f.plazoMeses>0||f.abonoFijo>0)){try{const am=amortTable({...f});h+=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--b1);text-align:center"><div><div style="font-size:.63rem;color:var(--t2);margin-bottom:3px">CAPITAL</div><div style="font-weight:700;color:var(--blue)">${$m(cap)}</div></div><div><div style="font-size:.63rem;color:var(--t2);margin-bottom:3px">TOTAL INTERÉS</div><div style="font-weight:700;color:var(--red)">${$m(am.totalInteres)}</div></div><div><div style="font-size:.63rem;color:var(--t2);margin-bottom:3px">PLAZO</div><div style="font-weight:700;color:var(--purple)">${am.rows.length} meses</div></div></div>`;}catch{}}
     h+=`</div>`;
     h+=`<div class="form-row form-group"><div><span class="lbl">Mes inicio</span><select id="fi-mesin">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mesInicio===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año inicio</span><input id="fi-anoin" type="number" value="${f.añoInicio||NOW.getFullYear()}"></div></div>`;
-  }else if(isD&&f.subtipo==='recurrente'){
-    h+=`<div class="form-row form-group"><div><span class="lbl">Monto mensual *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div><div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div></div>`;
-    h+=`<div class="form-group"><span class="lbl">Frecuencia</span><div class="seg"><button class="seg-btn${f.freq==='mensual'?' on':''}" onclick="sfv('freq','mensual')">🗓 Mensual</button><button class="seg-btn${f.freq==='quincenal'?' on':''}" onclick="sfv('freq','quincenal')">📅 Quincenal</button></div></div>`;
-    if(f.freq==='quincenal') h+=`<div class="form-group"><span class="lbl">Quincena</span><div class="seg"><button class="seg-btn${f.q===1?' on':''}" onclick="sfv('q',1)">Q1 · 1–15</button><button class="seg-btn${f.q===2?' on':''}" onclick="sfv('q',2)">Q2 · 16–31</button></div></div>`;
-    if(f.freq==='mensual') h+=`<div class="form-group"><span class="lbl">¿En qué quincena aparece?</span><div class="seg"><button class="seg-btn${(f.q||2)===1?' on':''}" onclick="sfv('q',1)">Q1 · días 1–15</button><button class="seg-btn${(f.q||2)===2?' on':''}" onclick="sfv('q',2)">Q2 · días 16–31</button></div><div style="font-size:.72rem;color:var(--t2);margin-top:5px">El ítem mensual se muestra solo en la quincena seleccionada, no en las dos.</div></div>`;
+
+  } else if(isD&&f.freq==='flotante'){
+    // Deuda flotante: solo monto y categoría
+    h+=`<div class="form-row form-group"><div><span class="lbl">Monto *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div><div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div></div>`;
+
+  } else if(isD&&(f.freq==='mensual'||f.freq==='quincenal')){
+    h+=`<div class="form-row form-group"><div><span class="lbl">Monto *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div><div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div></div>`;
+    if(f.freq==='quincenal') h+=`<div class="form-group"><span class="lbl">Quincena</span><div class="seg"><button class="seg-btn${f.q===1?' on':''}" onclick="sfv('q',1)">Q1 · días 1–15</button><button class="seg-btn${f.q===2?' on':''}" onclick="sfv('q',2)">Q2 · días 16–31</button></div></div>`;
+    if(f.freq==='mensual') h+=`<div style="background:rgba(96,165,250,.07);border:1px solid rgba(96,165,250,.15);border-radius:var(--r);padding:8px 12px;font-size:.78rem;color:var(--t1);margin-bottom:12px">ℹ️ Esta deuda aparecerá en <strong>Q1 y Q2</strong> cada mes. Podés aportar la mitad en Q1 y pagar el resto en Q2.</div>`;
     h+=`<div class="form-row form-group"><div><span class="lbl">Mes inicio</span><select id="fi-mesin">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mesInicio===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año inicio</span><input id="fi-anoin" type="number" value="${f.añoInicio||NOW.getFullYear()}"></div></div>`;
-    h+=`<div class="form-row form-group"><div><span class="lbl">Mes fin (opcional)</span><select id="fi-mesfin"><option value="">Sin fecha de fin</option>${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mesFin===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año fin</span><input id="fi-anofin" type="number" value="${f.añoFin||''}" placeholder="2026"></div></div>`;
-  }else{
+    h+=`<div class="form-row form-group"><div><span class="lbl">Mes fin (opcional)</span><select id="fi-mesfin"><option value="">Sin fecha de fin</option>${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mesFin===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año fin</span><input id="fi-anofin" type="number" value="${f.añoFin||''}" placeholder="2027"></div></div>`;
+
+  } else if(isD&&f.freq==='anual'){
+    h+=`<div class="form-row form-group"><div><span class="lbl">Monto total *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div><div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div></div>`;
+    h+=`<div style="background:rgba(240,180,41,.07);border:1px solid rgba(240,180,41,.15);border-radius:var(--r);padding:8px 12px;font-size:.78rem;color:var(--t1);margin-bottom:12px">📆 Esta deuda aparecerá en el mes que elegís, <strong>todos los años</strong>. Aparece en Q1 y Q2 de ese mes.</div>`;
+    h+=`<div class="form-row form-group"><div><span class="lbl">Mes en que vence</span><select id="fi-mes">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mes===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año (primera vez)</span><input id="fi-ano" type="number" value="${f.año||NOW.getFullYear()}"></div></div>`;
+
+  } else if(!isD){
+    // Ingresos y ahorros (sin cambios)
     h+=`<div class="form-row form-group">
       <div><span class="lbl">${isA?'Aporte':'Monto (USD)'} *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div>
       ${isA?`<div><span class="lbl">Meta total (opcional)</span><input id="fi-meta" type="number" step="0.01" value="${f.meta||''}" placeholder="Ej: 5000"></div>`:`<div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div>`}
@@ -1097,12 +1194,11 @@ function formHTML(){
     if(isA) h+=`<div class="form-group"><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${CATS.ahorro.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div>`;
     h+=`<div class="form-group"><span class="lbl">Frecuencia</span><div class="seg"><button class="seg-btn${f.freq==='quincenal'?' on':''}" onclick="sfv('freq','quincenal')">📅 Quincenal</button><button class="seg-btn${f.freq==='mensual'?' on':''}" onclick="sfv('freq','mensual')">🗓 Mensual</button><button class="seg-btn${f.freq==='anual'?' on':''}" onclick="sfv('freq','anual')">📆 Anual</button></div></div>`;
     if(f.freq==='quincenal') h+=`<div class="form-group"><span class="lbl">Quincena</span><div class="seg"><button class="seg-btn${f.q===1?' on':''}" onclick="sfv('q',1)">Q1 · 1–15</button><button class="seg-btn${f.q===2?' on':''}" onclick="sfv('q',2)">Q2 · 16–31</button></div></div>`;
-    if(f.freq==='mensual') h+=`<div class="form-group"><span class="lbl">¿En qué quincena aparece?</span><div class="seg"><button class="seg-btn${(f.q||2)===1?' on':''}" onclick="sfv('q',1)">Q1 · días 1–15</button><button class="seg-btn${(f.q||2)===2?' on':''}" onclick="sfv('q',2)">Q2 · días 16–31</button></div><div style="font-size:.72rem;color:var(--t2);margin-top:5px">Se muestra solo en esta quincena, no en las dos.</div></div>`;
-    if(f.freq==='mensual') h+=`<div class="form-group"><span class="lbl">Mes</span><select id="fi-mes">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mes===i+1?' selected':''}>${m}</option>`).join('')}</select></div>`;
-    if(f.freq==='anual') h+=`<div class="form-group"><span class="lbl">Mes en que ocurre</span><select id="fi-mes">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mes===i+1?' selected':''}>${m}</option>`).join('')}</select></div>`;
+    if(f.freq==='mensual'||f.freq==='anual') h+=`<div class="form-group"><span class="lbl">Mes</span><select id="fi-mes">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mes===i+1?' selected':''}>${m}</option>`).join('')}</select></div>`;
     h+=`<div class="form-group"><span class="lbl">Año</span><input id="fi-ano" type="number" value="${f.año||NOW.getFullYear()}"></div>`;
   }
-  if(isD) h+=`<div class="form-group"><span class="lbl">Acreedor / Institución</span><input id="fi-acr" value="${esc(f.acreedor||'')}" placeholder="Ej: Banco Nacional, Caja, Netflix..."></div>`;
+
+  if(isD) h+=`<div class="form-group"><span class="lbl">Acreedor / Institución</span><input id="fi-acr" value="${esc(f.acreedor||'')}" placeholder="Ej: Banco, tienda, persona..."></div>`;
   h+=`<div class="form-group"><span class="lbl">Notas (opcional)</span><textarea id="fi-det" placeholder="Detalles adicionales...">${esc(f.detalles||'')}</textarea></div>`;
   return h;
 }
@@ -1396,88 +1492,98 @@ function pagosHTML(t){
   const pend=t.deu.filter(d=>!d.paid).sort((a,b)=>b.monto-a.monto);
   const paid=t.deu.filter(d=>d.paid).sort((a,b)=>b.monto-a.monto);
   const pctDone=t.tD>0?pct(t.tPaid,t.tD):0;
+  const provisions=getProvisions();
+  const p=S.period;
 
   const pill=(txt,color,bg)=>`<span class="pill" style="background:${bg};color:${color};font-size:.68rem;padding:2px 7px">${txt}</span>`;
+  const freqBadge=(d)=>{
+    if(d._flotante) return pill("📌 Flotante","var(--red)","rgba(248,113,113,.1)");
+    if(d.esPrestamo) return pill("🏦 Préstamo","var(--purple)","rgba(167,139,250,.12)");
+    if(d.freq==="mensual") return pill("🔄 Mensual","var(--orange)","rgba(251,146,60,.1)");
+    if(d.freq==="quincenal") return pill(`📅 Q${d.q}`,"var(--gold)","rgba(240,180,41,.1)");
+    if(d.freq==="anual") return pill("📆 Anual","var(--blue)","rgba(96,165,250,.1)");
+    return "";
+  };
 
-  const debtCard=(d,isPaid)=>`<div class="di ${isPaid?'done':'pend'}">
+  const debtCard=(d,isPaid)=>`<div class="di ${isPaid?"done":"pend"}">
     <div class="di-hd">
-      <div class="di-dot" style="background:${isPaid?'var(--green)':'rgba(248,113,113,.65)'}"></div>
+      <div class="di-dot" style="background:${isPaid?"var(--green)":"rgba(248,113,113,.65)"}"></div>
       <div class="di-title">
-        <span class="di-name${isPaid?' crossed':''}">${esc(d.concepto)}</span>
-        <span class="di-sub">${[
-          d.acreedor?esc(d.acreedor):'',
-          d._inst?`Cuota ${d._inst.num}/${d._inst.total}`:'',
-          isPaid&&d.fechaPago?`✓ ${d.fechaPago}`:'',
-        ].filter(Boolean).join(' · ')}</span>
+        <span class="di-name${isPaid?" crossed":""}">${esc(d.concepto)}</span>
+        <span class="di-sub">${[d.acreedor?esc(d.acreedor):"",d._inst?`Cuota ${d._inst.num}/${d._inst.total}`:"",isPaid&&d.fechaPago?`✓ ${d.fechaPago}`:""].filter(Boolean).join(" · ")}</span>
       </div>
-      <div class="di-amt" style="color:${isPaid?'var(--green)':'var(--red)'}">${$m(d.monto)}</div>
+      <div class="di-amt" style="color:${isPaid?"var(--green)":"var(--red)"}">
+        ${$m(d.monto)}
+        ${d._totalAportado>0&&!isPaid?`<div style="font-size:.65rem;color:var(--t2);text-align:right">de ${$m((d._montoTotal||0)+d._totalAportado||d.monto)}</div>`:""}
+      </div>
     </div>
     <div class="di-tags">
-      ${d.esPrestamo?pill('Préstamo','var(--purple)','rgba(167,139,250,.12)'):''}
-      ${d.esRecurrente&&!d.esPrestamo?pill(d.freq==='mensual'?'Mensual':'Recurrente','var(--orange)','rgba(251,146,60,.1)'):''}
-      ${d._aportado>0?pill(`✓ $${d._aportado.toFixed(2)} apartado · Total ${$m(d._montoTotal)}`, 'var(--green)', 'rgba(52,211,153,.08)'):''}
+      ${freqBadge(d)}
+      ${d._totalAportado>0&&!isPaid?pill(`✓ ${$m(d._totalAportado)} aportado`,"var(--green)","rgba(52,211,153,.08)"):""}
     </div>
     ${d._inst&&d._inst.interes>0&&!isPaid?`<div class="di-breakdown">
       <div class="di-bc"><div class="bclbl">Interés</div><div class="bcval" style="color:var(--red)">${$m(d._inst.interes)}</div></div>
       <div class="di-bc"><div class="bclbl">Capital</div><div class="bcval" style="color:var(--blue)">${$m(d._inst.capital)}</div></div>
-      <div class="di-bc"><div class="bclbl">Saldo</div><div class="bcval" style="color:var(--t1)">${$m(d._inst.saldoDespues)}</div></div>
-    </div>`:''}
+      <div class="di-bc"><div class="bclbl">Saldo préstamo</div><div class="bcval" style="color:var(--t1)">${$m(d._inst.saldoDespues)}</div></div>
+    </div>`:""}
     <div class="di-foot">
-      ${!d._virtual?`<button class="ib" onclick="openEditModal('${d.id}')">✎</button><button class="ib ib-del" onclick="showDelModal('${d.id}')">✕</button>`:''}
+      ${!d._virtual?`<button class="ib" onclick="openEditModal('${d.id}')">✎</button><button class="ib ib-del" onclick="showDelModal('${d.id}')">✕</button>`:""}
       ${isPaid
-        ?`<button class="unpay-btn" onclick="unmarkPaid('${d.id}','${d._key||''}',${!!d._virtual})">↺ Desmarcar</button>`
-        :`<button class="pay-btn" onclick="openPayModal('${d.id}','${d._key||''}')">💳 Pagar</button>`}
+        ?`<button class="unpay-btn" onclick="unmarkPaid('${d.id}','${d._key||""}',${!!d._virtual})">↺ Desmarcar</button>`
+        :`<button class="pay-btn" onclick="openPayModal('${d.id}','${d._key||""}')">💳 Pagar</button>`}
     </div>
   </div>`;
 
   return `
   ${periodBarHTML()}
-
-  <!-- Stats: 2 cards top, full width below -->
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
     <div class="card pad-sm" style="border-top:2px solid var(--red)">
       <div class="sc-lbl">Por pagar</div>
       <div style="font-size:1.2rem;font-weight:700;color:var(--red);font-variant-numeric:tabular-nums">${$m(t.tPend)}</div>
-      <div class="sc-sub">${pend.length} pendiente${pend.length!==1?'s':''}</div>
+      <div class="sc-sub">${pend.length} pendiente${pend.length!==1?"s":""}</div>
     </div>
-    <div class="card pad-sm" style="border-top:2px solid var(--green)">
-      <div class="sc-lbl">Pagado</div>
-      <div style="font-size:1.2rem;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums">${$m(t.tPaid)}</div>
-      <div class="sc-sub">${paid.length} pagado${paid.length!==1?'s':''}</div>
+    <div class="card pad-sm" style="border-top:2px solid ${t.hasSaldo?(t.saldo>=0?"var(--green)":"var(--red)"):"var(--t2)"}">
+      <div class="sc-lbl">Saldo disponible</div>
+      <div style="font-size:1.2rem;font-weight:700;color:${t.hasSaldo?(t.saldo>=0?"var(--green)":"var(--red)"):"var(--t2)"};font-variant-numeric:tabular-nums">${t.hasSaldo?$m(t.saldo):"Sin registro"}</div>
+      <div class="sc-sub">${t.hasSaldo?`Proyectado: ${$m(t.balProy)}`:"Registrá tu saldo"}</div>
     </div>
   </div>
-  ${t.hasSaldo?`<div class="card pad-sm" style="margin-bottom:12px;border-top:2px solid ${t.balDisp>=0?'var(--teal)':'var(--red)'}">
-    <div class="sc-lbl">Disponible ahora</div>
-    <div style="font-size:1.2rem;font-weight:700;color:${t.balDisp>=0?'var(--teal)':'var(--red)'};font-variant-numeric:tabular-nums">${$m(t.balDisp)}</div>
-  </div>`:''}
-
-  ${t.tD>0?`<div class="card pad-sm" style="margin-bottom:16px">
+  ${t.tD>0?`<div class="card pad-sm" style="margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;margin-bottom:6px">
       <span style="font-size:.8rem;font-weight:600;color:var(--t1)">Progreso</span>
-      <span style="font-size:.8rem;font-weight:700;color:${pctDone===100?'var(--green)':'var(--orange)'}">${pctDone}%</span>
+      <span style="font-size:.8rem;font-weight:700;color:${pctDone===100?"var(--green)":"var(--orange)"}">${pctDone}%</span>
     </div>
-    <div class="prog prog-lg"><div class="prog-fill" style="width:${pctDone}%;background:${pctDone===100?'var(--green)':'var(--orange)'}"></div></div>
+    <div class="prog prog-lg"><div class="prog-fill" style="width:${pctDone}%;background:${pctDone===100?"var(--green)":"var(--orange)"}"></div></div>
     <div class="prog-meta"><span>${$m(t.tPaid)} pagado</span><span>${$m(t.tPend)} pendiente</span></div>
-  </div>`:''}
-
+  </div>`:""}
+  ${provisions.length>0&&p.mode==="q"?`<div style="background:rgba(240,180,41,.05);border:1px solid rgba(240,180,41,.18);border-radius:var(--r-md);padding:12px;margin-bottom:12px">
+    <div style="font-size:.8rem;font-weight:600;color:var(--gold);margin-bottom:10px">💡 Aportar ahora — Q${p.q}</div>
+    ${provisions.map(d=>`<div class="di" style="border-left:3px solid ${d._apartado?"rgba(52,211,153,.5)":"rgba(240,180,41,.4)"}">
+      <div class="di-hd">
+        <div class="di-dot" style="background:${d._apartado?"var(--green)":"rgba(240,180,41,.6)"}"></div>
+        <div class="di-title">
+          <span class="di-name" style="color:${d._apartado?"var(--t2)":"var(--t0)"};${d._apartado?"text-decoration:line-through":""}">${esc(d.concepto)}</span>
+          <span class="di-sub">Total: ${$m(d._fullMonto)}${d._totalAportado>0?" · Aportado: "+$m(d._totalAportado):""}</span>
+        </div>
+        <div class="di-amt" style="color:${d._apartado?"var(--green)":"var(--gold)"}">${$m(d.monto)}</div>
+      </div>
+      <div class="di-foot">
+        <button onclick="marcarApartado('${d.id}','${d._pk}')" style="background:${d._apartado?"transparent":"rgba(240,180,41,.12)"};border:1px solid ${d._apartado?"var(--b2)":"rgba(240,180,41,.35)"};color:${d._apartado?"var(--t2)":"var(--gold)"};border-radius:var(--r);padding:6px 14px;cursor:pointer;font-family:var(--font);font-size:.82rem;font-weight:500">
+          ${d._apartado?"↺ Revertir aporte":"✓ Aportar "+$m(d.monto)}
+        </button>
+      </div>
+    </div>`).join("")}
+  </div>`:""}
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
     <span style="font-size:.8rem;font-weight:600;color:var(--red);text-transform:uppercase;letter-spacing:.06em">Por pagar</span>
-    <div style="display:flex;gap:6px">
-      <button class="btn btn-ghost btn-xs" onclick="openAddModal('deuda','simple')">+ Deuda</button>
-      <button class="btn btn-ghost btn-xs" onclick="openAddModal('deuda','prestamo')" style="color:var(--purple)">+ Préstamo</button>
-    </div>
+    <button class="btn btn-ghost btn-xs" onclick="openAddModal('deuda')">+ Deuda</button>
   </div>
   ${pend.length===0
     ?`<div class="card pad" style="text-align:center;margin-bottom:16px"><div style="font-size:2rem;opacity:.18;margin-bottom:8px">🎉</div><div style="font-size:.9rem;color:var(--t1);font-weight:500">Todo pagado este período</div></div>`
-    :pend.map(d=>debtCard(d,false)).join('')}
-
-  ${paid.length>0?`<div style="font-size:.8rem;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 10px">✓ Pagado</div>
-  ${paid.map(d=>debtCard(d,true)).join('')}`:''}`;
+    :pend.map(d=>debtCard(d,false)).join("")}
+  ${paid.length>0?`<div style="font-size:.8rem;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 10px">✓ Pagado</div>${paid.map(d=>debtCard(d,true)).join("")}`:""}`;
 }
 
-// ══════════════════════════════════════════
-//  DEUDAS TAB
-// ══════════════════════════════════════════
 function deudasHTML(t){
   const smartDebts=S.entries.filter(e=>e.tipo==='deuda'&&e.esRecurrente);
   const fLabel=e=>e.esPrestamo?`<span class="pill" style="background:rgba(167,139,250,.12);color:var(--purple)">🏦 Préstamo</span>`:e.esRecurrente?`<span class="pill" style="background:rgba(251,146,60,.1);color:var(--orange)">🔄 Recurrente</span>`:e.freq==='anual'?`<span class="pill" style="background:rgba(96,165,250,.1);color:var(--blue)">📆 Anual</span>`:e.freq==='mensual'?`<span class="pill" style="background:rgba(201,168,76,.1);color:var(--gold)">Mensual Q${targetQ(e)}</span>`:`<span class="pill" style="background:rgba(201,168,76,.1);color:var(--gold)">Q${e.q}</span>`;
