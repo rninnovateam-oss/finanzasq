@@ -219,21 +219,60 @@ details summary::-webkit-details-marker{display:none}
 
 /* ── RESPONSIVE ── */
 @media(max-width:768px){
-  .topbar{padding:0 16px;gap:0;padding-left:max(16px,env(safe-area-inset-left));padding-right:max(16px,env(safe-area-inset-right))}
+  /* Topbar: compacto, nada desborda */
+  .topbar{padding:0 12px;gap:6px}
+  .topbar-logo{font-size:.9rem}
   .topbar-nav{display:none}
+  .topbar-right{gap:4px}
+  #save-badge{display:none!important}
+  /* Balance badge: solo el número, sin label */
+  #balance-badge{padding:4px 8px;gap:4px}
+  #balance-badge .bal-lbl{display:none}
+  #balance-value{font-size:.82rem}
+  .btn-ghost.btn-sm[onclick*="openSettings"]{padding:6px 8px;font-size:.8rem}
+
+  /* Mobile nav: siempre visible */
   .mobile-nav-bar{display:flex!important}
-  .main{padding:14px 16px calc(68px + env(safe-area-inset-bottom))}
-  .mobile-nav-bar{height:calc(58px + env(safe-area-inset-bottom));padding-bottom:env(safe-area-inset-bottom)}
-  .period-bar{padding:14px 16px 0}
+  .main{padding:14px 14px calc(70px + env(safe-area-inset-bottom,0px))}
+  .mobile-nav-bar{
+    height:calc(56px + env(safe-area-inset-bottom,0px));
+    padding-bottom:env(safe-area-inset-bottom,0px);
+  }
+
+  /* Modales: bottom sheet en mobile */
+  .overlay{align-items:flex-end;padding:0;overflow:hidden}
+  .modal,.pay-modal,.del-modal{
+    border-radius:20px 20px 0 0 !important;
+    padding:20px 16px 40px !important;
+    max-height:92vh;overflow-y:auto;
+    width:100%;max-width:100%;
+  }
+
+  /* Grids */
   .cards-grid{grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
   .two-col{grid-template-columns:1fr}
   .three-col{grid-template-columns:1fr 1fr}
   .form-row{grid-template-columns:1fr}
-  .sc-val{font-size:1.1rem}
-  .modal{padding:22px 18px}
-  .ai-bubble.user{margin-left:8%}
-  .ai-bubble.bot{margin-right:8%}
-  .amort-wrap{max-height:200px;overflow-y:auto}
+  .savings-grid{grid-template-columns:1fr}
+
+  /* Period bar: wrap para que no desborde */
+  .period-bar-wrap{flex-wrap:wrap;gap:8px}
+
+  /* Seg controls: reducir padding */
+  .seg-btn{padding:6px 8px;font-size:.75rem}
+  .seg{width:100%}
+
+  /* Cards */
+  .sc-val{font-size:1rem}
+  .pad{padding:14px}
+  .pad-sm{padding:10px 12px}
+
+  /* Row list: scroll horizontal si es necesario */
+  .row-list{overflow-x:auto}
+  .ai-bubble.user{margin-left:5%}
+  .ai-bubble.bot{margin-right:5%}
+  .amort-wrap{max-height:200px;overflow-y:auto;overflow-x:auto}
+  .amort{min-width:400px}
 }
 @media(min-width:769px){
   .mobile-nav-bar{display:none!important}
@@ -1041,7 +1080,7 @@ function renderApp(){
     <div class="topbar-right">
       <!-- Live balance indicator — updates after every action -->
       <div id="balance-badge" onclick="openSaldoModal()" style="cursor:pointer;display:flex;align-items:center;gap:6px;padding:5px 12px;border-radius:var(--r);background:var(--b1);border:1px solid var(--b1);transition:all .15s" title="Click para actualizar saldo">
-        <span style="font-size:.68rem;color:var(--t2);text-transform:uppercase;letter-spacing:.06em">Disponible</span>
+        <span class="bal-lbl" style="font-size:.68rem;color:var(--t2);text-transform:uppercase;letter-spacing:.06em">Disponible</span>
         <span id="balance-value" style="font-size:.88rem;font-weight:700;font-variant-numeric:tabular-nums">—</span>
       </div>
       <span id="save-badge" style="font-size:.72rem"></span>
@@ -1155,14 +1194,14 @@ function periodLabel(){
 
 function periodBarHTML(extra){
   const p=S.period;
-  return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:20px;flex-wrap:wrap">
+  return `<div class="period-bar-wrap" style="display:flex;align-items:center;gap:8px;margin-bottom:20px">
     <div class="seg" style="flex-shrink:0">
-      <button class="seg-btn${p.mode==='q'?' on':''}" onclick="setMode('q')" style="padding:6px 14px">📅 Quincena</button>
-      <button class="seg-btn${p.mode==='mes'?' on':''}" onclick="setMode('mes')" style="padding:6px 14px">📆 Mes</button>
+      <button class="seg-btn${p.mode==='q'?' on':''}" onclick="setMode('q')">📅 Quincena</button>
+      <button class="seg-btn${p.mode==='mes'?' on':''}" onclick="setMode('mes')">📆 Mes</button>
     </div>
-    <button class="btn btn-ghost btn-sm" onclick="shiftP(-1)" style="padding:6px 14px">‹</button>
-    <span style="font-size:.92rem;font-weight:600;color:var(--gold);letter-spacing:.04em">${periodLabel()}</span>
-    <button class="btn btn-ghost btn-sm" onclick="shiftP(1)" style="padding:6px 14px">›</button>
+    <button class="btn btn-ghost btn-sm" onclick="shiftP(-1)" style="padding:6px 14px;flex-shrink:0">‹</button>
+    <span style="font-size:.88rem;font-weight:600;color:var(--gold);letter-spacing:.03em;white-space:nowrap">${periodLabel()}</span>
+    <button class="btn btn-ghost btn-sm" onclick="shiftP(1)" style="padding:6px 14px;flex-shrink:0">›</button>
     ${extra||''}
   </div>`;
 }
