@@ -1,61 +1,52 @@
-// FinanzasQ Service Worker — v3 (bumped to force cache refresh)
-const CACHE_NAME = 'finanzasq-v3';
-const CORE_STATIC = [
+// FinanzasQ Service Worker — v4
+const CACHE = 'finanzasq-v4';
+const STATIC = [
   './manifest.json',
   './icon.svg',
-  'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js',
+  'https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=DM+Mono:wght@400;500&display=swap',
 ];
 
-// Install: cache static assets (NOT index.html — we use network-first for it)
-self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(CORE_STATIC))
-      .then(() => self.skipWaiting())
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE).then(c => c.addAll(STATIC)).then(() => self.skipWaiting())
   );
 });
 
-// Activate: remove ALL old caches so stale index.html is cleared
-self.addEventListener('activate', event => {
-  event.waitUntil(
+self.addEventListener('activate', e => {
+  e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
-// Fetch strategy:
-//   index.html → Network-first (always get latest code, fall back to cache when offline)
-//   everything else → Cache-first (faster, assets don't change)
-self.addEventListener('fetch', event => {
-  const url = new URL(event.request.url);
-  const isNavigation = event.request.mode === 'navigate';
-  const isIndexHtml = isNavigation || url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
+self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+  const isNav = e.request.mode === 'navigate';
+  const isMain = isNav || url.pathname.endsWith('/') || url.pathname.endsWith('/index.html');
 
-  if (isIndexHtml) {
-    // Network-first for the main HTML page
-    event.respondWith(
-      fetch(event.request)
-        .then(response => {
-          if (response && response.status === 200) {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+  if (isMain) {
+    // Network-first for main HTML — always get latest code
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {
+          if (res?.status === 200) {
+            caches.open(CACHE).then(c => c.put(e.request, res.clone()));
           }
-          return response;
+          return res;
         })
         .catch(() => caches.match('./index.html'))
     );
   } else {
-    // Cache-first for static assets
-    event.respondWith(
-      caches.match(event.request).then(cached => {
+    // Cache-first for assets (fonts, icons, etc.)
+    e.respondWith(
+      caches.match(e.request).then(cached => {
         if (cached) return cached;
-        return fetch(event.request).then(response => {
-          if (response && response.status === 200 && response.type !== 'opaque') {
-            const clone = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+        return fetch(e.request).then(res => {
+          if (res?.status === 200 && res.type !== 'opaque') {
+            caches.open(CACHE).then(c => c.put(e.request, res.clone()));
           }
-          return response;
+          return res;
         });
       })
     );

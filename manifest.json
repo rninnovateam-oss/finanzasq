@@ -1,14 +1,15 @@
 {
-  "name": "FinanzasQ",
+  "name": "FinanzasQ — Control Financiero",
   "short_name": "FinanzasQ",
-  "description": "Control financiero personal",
+  "description": "Control financiero personal: salario quincenal, deudas, préstamos y asesor IA",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#0c1117",
-  "theme_color": "#f0b429",
+  "background_color": "#040d1a",
+  "theme_color": "#040d1a",
   "orientation": "portrait-primary",
   "lang": "es",
+  "categories": ["finance", "productivity"],
   "icons": [
     {
       "src": "./icon.svg",
