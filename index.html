@@ -395,7 +395,7 @@ const GROQ_MODEL='llama-3.3-70b-versatile';
 
 let S={
   entries:[],
-  period:{mes:NOW.getMonth()+1,año:NOW.getFullYear(),q:NOW.getDate()<=15?1:2,mode:'q'},
+  period:{mes:NOW.getMonth()+1,año:NOW.getFullYear()},
   tab:'home',screen:'welcome',
   fileHandle:null,fileName:null,unsaved:false,
   modalMode:null,form:{},pendingDelId:null,pendingPay:null,
@@ -451,159 +451,155 @@ function amortTable(loan){
 }
 
 // ══════════════════════════════════════════
-//  DATA LAYER
+//  DATA LAYER — Todo mensual, sin quincenas
 // ══════════════════════════════════════════
-// Helper: for a monthly item, which quincena does it belong to?
-// ══════════════════════════════════════════
-//  DATA LAYER — Sistema de deudas rediseñado
-// ══════════════════════════════════════════
-//
-//  Tipos de deuda (freq):
-//  'flotante' → sin fecha, siempre visible hasta pagar
-//  'mensual'  → aparece en Q1 Y Q2, se puede aportar en cada quincena
-//  'quincenal'→ solo en su quincena asignada
-//  'anual'    → en el mes asignado cada año (Q1 y Q2 de ese mes)
-//  Préstamos  → amortización mensual, aparece en Q1 y Q2 con aportes
 
-// Clave de aporte por quincena específica
-function apKey(p){ return `ap-${mKey(p.mes,p.año)}-Q${p.q}`; }
-// Total aportado este mes (sumando Q1 + Q2)
+// ── Aportes (pagos parciales) ──────────────────────────────────────────────
+// e.aportes = { 'YYYY-MM': [{id, monto, fecha, nota}] }
+function getAportesMes(e, mes, año){
+  return ((e.aportes||{})[mKey(mes,año)])||[];
+}
 function totalAportadoMes(e, mes, año){
-  const prs=e.provisiones||{};
-  return R2(
-    (prs[`ap-${mKey(mes,año)}-Q1`]?.monto||0)+
-    (prs[`ap-${mKey(mes,año)}-Q2`]?.monto||0)
-  );
+  return R2(getAportesMes(e,mes,año).reduce((s,a)=>s+a.monto,0));
 }
 
+// ── matchesPeriod ──────────────────────────────────────────────────────────
 function matchesPeriod(e,p){
-  // Flotante: siempre visible (manejado por getDeudas directamente)
-  if(e.freq==='flotante') return false; // no usar matchesPeriod para flotantes
-  if(e.año!==p.año||e.mes!==p.mes) return false;
-  if(e.freq==='anual') return true;
-  if(p.mode==='mes') return true;
-  if(e.freq==='mensual') return true; // mensual → ambas quincenas
-  return e.q===p.q; // quincenal → solo su quincena
-}
-
-function getProvisions(){
-  // Aportes: deudas mensuales/préstamos con aporte parcial en la quincena actual
-  const p=S.period;
-  if(p.mode==='mes') return [];
-  const res=[];
-  S.entries.forEach(e=>{
-    if(e.tipo!=='deuda') return;
-    const isMensual=(e.esRecurrente&&e.freq==='mensual')||e.esPrestamo;
-    if(!isMensual) return;
-    const off=mDiff(e.mesInicio,e.añoInicio,p.mes,p.año);
-    if(off<0) return;
-    if(e.mesFin&&e.añoFin&&mDiff(e.mesInicio,e.añoInicio,e.mesFin,e.añoFin)<off) return;
-    let fullMonto=0;
-    if(e.esPrestamo){const inst=getInstallmentAt(e,off);if(!inst)return;fullMonto=inst.cuota;}
-    else{fullMonto=e.monto;}
-    const pgKey=mKey(p.mes,p.año);
-    if((e.pagos||{})[pgKey]?.pagado) return; // ya pagado este mes
-    const pk=apKey(p);
-    const apartado=!!(e.provisiones||{})[pk];
-    const montoApartado=((e.provisiones||{})[pk]?.monto)||0;
-    const totAp=totalAportadoMes(e,p.mes,p.año);
-    const restante=R2(Math.max(0,fullMonto-totAp));
-    const sugerido=R2(fullMonto/2);
-    res.push({...e,_provision:true,_fullMonto:fullMonto,monto:sugerido,_apartado:apartado,_pk:pk,_montoApartado:montoApartado,_totalAportado:totAp,_restante:restante});
-  });
-  return res;
-}
-
-async function marcarApartado(id, pk){
-  const e=S.entries.find(x=>x.id===id);if(!e)return;
-  if(!e.provisiones)e.provisiones={};
-  const yaApartado=!!e.provisiones[pk];
-  const p=S.period;
-  const off=mDiff(e.mesInicio,e.añoInicio,p.mes,p.año);
-  const fullMonto=e.esPrestamo?(getInstallmentAt(e,off)?.cuota||0):e.monto;
-  const sugerido=R2(fullMonto/2);
-  if(yaApartado){
-    const montoRestaurar=e.provisiones[pk]?.monto||sugerido;
-    delete e.provisiones[pk];
-    ajustarSaldo(montoRestaurar);
-    await persist(); renderTab(S.tab);
-    toast(`Aporte revertido — saldo restaurado${getSaldoEntry()?': '+$m(getSaldoActual()):''}`);
-  } else {
-    const chk=canAfford(sugerido);
-    if(!chk.ok){
-      toast(`⚠ Saldo insuficiente para apartar ${$m(sugerido)} — disponible: ${$m(chk.disponible)} (faltan ${$m(chk.deficit)})`,true);
-      return;
-    }
-    e.provisiones[pk]={apartado:true,fecha:isoToday(),monto:sugerido};
-    ajustarSaldo(-sugerido);
-    await persist(); renderTab(S.tab);
-    toast(`Aporte registrado ✓${getSaldoEntry()?' — saldo: '+$m(getSaldoActual()):''}`);
+  if(e.tipo==='ahorro'||e.tipo==='ingreso'){
+    if(e.año!==p.año||e.mes!==p.mes) return false;
+    return true; // all frequencies shown in their month
   }
+  return false;
 }
 
+// ── getDeudas: todas las deudas del mes actual ─────────────────────────────
 function getDeudas(){
-  const p=S.period,res=[];
-  const mes=p.mes,año=p.año;
-
+  const {mes,año}=S.period, res=[];
   S.entries.forEach(e=>{
     if(e.tipo!=='deuda') return;
 
-    // ── FLOTANTE: siempre visible si no está pagada ──────────────
+    // FLOTANTE — siempre visible si no está pagada
     if(e.freq==='flotante'||e.subtipo==='flotante'){
-      if(!e.paid) res.push({...e,_virtual:false,_flotante:true});
+      if(!e.paid) res.push({...e,_virtual:false,_flotante:true,_totalAportado:0,_montoTotal:e.monto});
       return;
     }
 
-    if(!e.esRecurrente){
-      // ── SIMPLE/ANUAL/QUINCENAL/MENSUAL con fecha ─────────────
-      if(e.freq==='anual'){
-        if(e.año===año&&e.mes===mes) res.push({...e,_virtual:false});
-      } else if(e.freq==='mensual'){
-        if(e.año===año&&e.mes===mes&&p.mode!=='q') res.push({...e,_virtual:false});
-        else if(e.año===año&&e.mes===mes) res.push({...e,_virtual:false}); // ambas quincenas
-      } else if(e.freq==='quincenal'){
-        if(e.año===año&&e.mes===mes&&e.q===p.q) res.push({...e,_virtual:false});
-      } else {
-        if(matchesPeriod(e,p)) res.push({...e,_virtual:false});
-      }
-    } else {
+    // PRÉSTAMO — cuota mensual desde mesInicio
+    if(e.esPrestamo){
+      const off=mDiff(e.mesInicio,e.añoInicio,mes,año);
+      if(off<0) return;
+      const inst=getInstallmentAt(e,off);if(!inst) return;
+      const pgKey=mKey(mes,año);const pg=(e.pagos||{})[pgKey]||{};
+      const totAp=totalAportadoMes(e,mes,año);
+      const montoMostrar=R2(Math.max(0,inst.cuota-totAp));
+      res.push({...e,_virtual:true,_key:pgKey,_inst:inst,
+        monto:montoMostrar,_totalAportado:totAp,_montoTotal:inst.cuota,
+        paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
+      return;
+    }
+
+    // MENSUAL — cada mes desde mesInicio
+    if(e.freq==='mensual'&&e.esRecurrente){
       const off=mDiff(e.mesInicio,e.añoInicio,mes,año);if(off<0) return;
       if(e.mesFin&&e.añoFin&&mDiff(e.mesInicio,e.añoInicio,e.mesFin,e.añoFin)<off) return;
+      const pgKey=mKey(mes,año);const pg=(e.pagos||{})[pgKey]||{};
+      const totAp=totalAportadoMes(e,mes,año);
+      const montoMostrar=R2(Math.max(0,e.monto-totAp));
+      res.push({...e,_virtual:true,_key:pgKey,_inst:null,
+        monto:montoMostrar,_totalAportado:totAp,_montoTotal:e.monto,
+        paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
+      return;
+    }
 
-      if(e.esPrestamo){
-        // ── PRÉSTAMO: aparece en Q1 y Q2 ─────────────────────────
-        const inst=getInstallmentAt(e,off);if(!inst) return;
-        const pgKey=mKey(mes,año);const pg=(e.pagos||{})[pgKey]||{};
-        const totAp=totalAportadoMes(e,mes,año);
-        const montoFinal=R2(Math.max(0,inst.cuota-totAp));
-        res.push({...e,_virtual:true,_key:pgKey,_inst:inst,
-          monto:montoFinal,_totalAportado:totAp,_montoTotal:inst.cuota,
-          paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
+    // ANUAL — en su mes específico cada año
+    if(e.freq==='anual'){
+      if(e.mes!==mes) return;
+      if(e.esRecurrente){
+        const off=mDiff(e.mesInicio,e.añoInicio,mes,año);if(off<0||off%12!==0) return;
       } else {
-        // ── RECURRENTE ───────────────────────────────────────────
-        if(e.freq==='quincenal'){
-          if(p.mode==='q'&&e.q!==p.q) return; // solo su quincena
-        }
-        // mensual → ambas quincenas (no filtrar por q)
-        const key=p.mode==='mes'
-          ?mKey(mes,año)
-          :e.freq==='quincenal'?`${mKey(mes,año)}-Q${p.q}`:mKey(mes,año);
-        const pg=(e.pagos||{})[key]||{};
-        const totAp=e.freq==='mensual'?totalAportadoMes(e,mes,año):0;
-        const montoFinal=R2(Math.max(0,e.monto-totAp));
-        res.push({...e,_virtual:true,_key:key,_inst:null,
-          monto:montoFinal,_totalAportado:totAp,_montoTotal:e.monto,
-          paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
+        if(e.año!==año) return;
       }
+      const pgKey=mKey(mes,año);const pg=(e.pagos||{})[pgKey]||{};
+      const totAp=totalAportadoMes(e,mes,año);
+      const montoMostrar=R2(Math.max(0,e.monto-totAp));
+      res.push({...e,_virtual:true,_key:pgKey,_inst:null,
+        monto:montoMostrar,_totalAportado:totAp,_montoTotal:e.monto,
+        paid:!!pg.pagado,fechaPago:pg.fechaPago||'',notaPago:pg.nota||''});
+      return;
     }
   });
   return res;
 }
 
-function getPeriodByType(tipo){
-  const p=S.period;
-  return S.entries.filter(e=>e.tipo===tipo&&matchesPeriod(e,p));
+function getPeriodIngresos(){
+  const {mes,año}=S.period;
+  return S.entries.filter(e=>e.tipo==='ingreso'&&e.año===año&&e.mes===mes);
 }
+function getPeriodAhorros(){
+  const {mes,año}=S.period;
+  return S.entries.filter(e=>e.tipo==='ahorro'&&e.año===año&&e.mes===mes);
+}
+function getPeriodByType(tipo){
+  const {mes,año}=S.period;
+  return S.entries.filter(e=>e.tipo===tipo&&e.año===año&&e.mes===mes);
+}
+function savingsGoals(){
+  const map={};
+  S.entries.filter(e=>e.tipo==='ahorro').forEach(e=>{
+    const k=e.concepto||'Sin nombre';
+    if(!map[k])map[k]={nombre:k,meta:0,cat:e.cat||'',entries:[],total:0};
+    if((e.meta||0)>map[k].meta)map[k].meta=e.meta||0;
+    map[k].entries.push(e);map[k].total+=e.monto||0;
+  });
+  return Object.values(map).sort((a,b)=>b.total-a.total);
+}
+
+// ── Aporte (pago parcial) ──────────────────────────────────────────────────
+let _aportePending=null;
+function openAporteModal(id){
+  const deu=getDeudas().find(e=>e.id===id);if(!deu)return;
+  const restante=deu.monto; // ya es el monto restante
+  if(restante<=0){toast('Esta deuda ya está cubierta — marcala como pagada',true);return;}
+  _aportePending=id;
+  document.getElementById('modal-title').textContent='Registrar aporte';
+  document.getElementById('modal-body').innerHTML=`
+    <div style="background:var(--card2);border-radius:var(--r);padding:12px;margin-bottom:14px">
+      <div style="font-size:.88rem;font-weight:500">${esc(deu.concepto)}</div>
+      <div style="font-size:.78rem;color:var(--t2);margin-top:3px">Restante: <strong style="color:var(--red)">${$m(restante)}</strong>${deu._totalAportado>0?' · Aportado hasta ahora: '+$m(deu._totalAportado):''}</div>
+    </div>
+    <div class="form-group">
+      <span class="lbl">¿Cuánto aportás ahora?</span>
+      <input type="number" id="aporte-monto" step="0.01" max="${restante}" value="${R2(restante/2)||''}" placeholder="Ej: ${R2(restante/2)}">
+    </div>
+    <div class="form-group">
+      <span class="lbl">Nota (opcional)</span>
+      <input type="text" id="aporte-nota" placeholder="Ej: 1era mitad...">
+    </div>
+    <div style="font-size:.78rem;color:var(--t2);background:rgba(96,165,250,.07);border-radius:var(--r);padding:8px 10px">
+      💡 El aporte descuenta del monto pendiente. Cuando aportés todo, usá "Pagar" para cerrar la deuda.
+    </div>
+  `;
+  document.getElementById('modal-save').textContent='Registrar aporte';
+  document.getElementById('modal-save').onclick=async()=>{
+    const v=parseFloat(document.getElementById('aporte-monto')?.value);
+    const nota=document.getElementById('aporte-nota')?.value||'';
+    if(!v||v<=0) return toast('Ingresá un monto válido',true);
+    if(v>restante) return toast(`No podés aportar más que el restante (${$m(restante)})`,true);
+    const chk=canAfford(v);
+    if(!chk.ok) return toast(`⚠ Saldo insuficiente — disponible: ${$m(chk.disponible)}`,true);
+    const e=S.entries.find(x=>x.id===_aportePending);if(!e)return;
+    if(!e.aportes)e.aportes={};
+    const key=mKey(S.period.mes,S.period.año);
+    if(!e.aportes[key])e.aportes[key]=[];
+    e.aportes[key].push({id:uid(),monto:v,fecha:isoToday(),nota});
+    ajustarSaldo(-v);
+    await persist();closeModal();renderTab(S.tab);
+    toast(`Aporte de ${$m(v)} registrado ✓${getSaldoEntry()?' — saldo: '+$m(getSaldoActual()):''}`);
+  };
+  S.modalMode='aporte';
+  document.getElementById('modal').style.display='flex';
+}
+
 // ══════════════════════════════════════════
 function getSaldoEntry(){ return S.entries.find(e=>e.tipo==='saldo')||null; }
 function getSaldoActual(){ return getSaldoEntry()?.monto||0; }
@@ -708,18 +704,17 @@ function savingsGoals(){
   return Object.values(map).sort((a,b)=>b.total-a.total);
 }
 function computeTotals(){
-  const ing=getPeriodByType('ingreso'),aho=getPeriodByType('ahorro'),deu=getDeudas();
-  const prov=getProvisions();
+  const ing=getPeriodIngresos(),aho=getPeriodAhorros(),deu=getDeudas();
   const tI=ing.reduce((s,e)=>s+e.monto,0),tA=aho.reduce((s,e)=>s+e.monto,0),tD=deu.reduce((s,e)=>s+e.monto,0);
   const tPaid=deu.filter(d=>d.paid).reduce((s,e)=>s+e.monto,0),tPend=deu.filter(d=>!d.paid).reduce((s,e)=>s+e.monto,0);
-  const tApartado=prov.filter(d=>d._apartado).reduce((s,d)=>s+d.monto,0);
+  const tAportadoTotal=deu.filter(d=>!d.paid).reduce((s,d)=>s+d._totalAportado,0);
   const saldo=getSaldoActual(), hasSaldo=getSaldoEntry()!==null;
   // Con saldo registrado: balDisp = saldo real (ya actualizado por cada acción automáticamente)
   //                       balProy = cuánto quedaría pagando todo lo pendiente
   // Sin saldo: cálculo por período (modo básico)
   const balDisp=hasSaldo?saldo:(tI-tPaid-tA-tApartado);
   const balProy=hasSaldo?R2(saldo-tPend):(tI-tD-tA);
-  return{ing,aho,deu,prov,tI,tA,tD,tPaid,tPend,tApartado,saldo,hasSaldo,balDisp,balProy};
+  return{ing,aho,deu,tI,tA,tD,tPaid,tPend,tAportadoTotal,saldo,hasSaldo,balDisp,balProy};
 }
 
 function canAfford(amount){
@@ -740,6 +735,7 @@ function buildWB(){
     const pagosMerged={...(e.pagos||{})};
     if(e.provisiones&&Object.keys(e.provisiones).length>0){
       pagosMerged.__provisiones=e.provisiones;
+    if(e.aportes&&Object.keys(e.aportes).length>0)pagosMerged.__aportes=e.aportes;
     }
     rows.push([e.id,e.tipo,e.subtipo||'',e.modalidadPrestamo||'',e.concepto,e.monto||0,e.meta||0,e.freq||'quincenal',e.freq==='quincenal'?(e.q===1?'1-15':'16-31'):'—',MONTHS[(e.mes||1)-1],e.año||NOW.getFullYear(),e.mesInicio||'',e.añoInicio||'',e.mesFin||'',e.añoFin||'',e.plazoMeses||'',e.capitalInicial||'',e.tasaMensual||'',e.cuota||'',e.abonoFijo||'',e.cat||'',e.acreedor||'',e.paid?'Sí':'No',e.notaPago||'',e.fechaPago||'',e.detalles||'',Object.keys(pagosMerged).length>0?JSON.stringify(pagosMerged):'',e.createdAt||'']);
   });
@@ -748,15 +744,16 @@ function buildWB(){
 function parseWB(wb){
   const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1}).slice(1);
   return rows.filter(r=>r[0]).map(r=>{
-    let pagos={},provisiones={};
+    let pagos={},provisiones={},aportes={};
     try{
       if(r[26]){
         const parsed=JSON.parse(r[26]);
         if(parsed.__provisiones){provisiones=parsed.__provisiones;delete parsed.__provisiones;}
+        if(parsed.__aportes){aportes=parsed.__aportes;delete parsed.__aportes;}
         pagos=parsed;
       }
     }catch{}
-    return{id:r[0]||uid(),tipo:r[1]||'deuda',subtipo:r[2]||'simple',modalidadPrestamo:r[3]||'plazo',concepto:r[4]||'',monto:parseFloat(r[5])||0,meta:parseFloat(r[6])||0,freq:r[7]||'quincenal',q:r[8]==='1-15'?1:2,mes:MONTHS.indexOf(r[9])+1||1,año:parseInt(r[10])||NOW.getFullYear(),mesInicio:parseInt(r[11])||null,añoInicio:parseInt(r[12])||null,mesFin:parseInt(r[13])||null,añoFin:parseInt(r[14])||null,plazoMeses:parseInt(r[15])||null,capitalInicial:parseFloat(r[16])||0,tasaMensual:parseFloat(r[17])||0,cuota:parseFloat(r[18])||0,abonoFijo:parseFloat(r[19])||0,cat:r[20]||'',acreedor:r[21]||'',paid:r[22]==='Sí',notaPago:r[23]||'',fechaPago:r[24]||'',detalles:r[25]||'',pagos,provisiones,createdAt:r[27]||new Date().toISOString(),esRecurrente:r[2]==='recurrente'||r[2]==='prestamo',esPrestamo:r[2]==='prestamo'};
+    return{id:r[0]||uid(),tipo:r[1]||'deuda',subtipo:r[2]||'simple',modalidadPrestamo:r[3]||'plazo',concepto:r[4]||'',monto:parseFloat(r[5])||0,meta:parseFloat(r[6])||0,freq:r[7]||'quincenal',q:r[8]==='1-15'?1:2,mes:MONTHS.indexOf(r[9])+1||1,año:parseInt(r[10])||NOW.getFullYear(),mesInicio:parseInt(r[11])||null,añoInicio:parseInt(r[12])||null,mesFin:parseInt(r[13])||null,añoFin:parseInt(r[14])||null,plazoMeses:parseInt(r[15])||null,capitalInicial:parseFloat(r[16])||0,tasaMensual:parseFloat(r[17])||0,cuota:parseFloat(r[18])||0,abonoFijo:parseFloat(r[19])||0,cat:r[20]||'',acreedor:r[21]||'',paid:r[22]==='Sí',notaPago:r[23]||'',fechaPago:r[24]||'',detalles:r[25]||'',pagos,provisiones,createdAt:r[27]||new Date().toISOString(),esRecurrente:r[2]==='recurrente'||r[2]==='prestamo',esPrestamo:r[2]==='prestamo',aportes};
   });
 }
 // ── LocalStorage helpers (used when running from file://) ──
@@ -955,15 +952,16 @@ async function saveEntry(){
     f.esRecurrente=false;f.esPrestamo=false;
   }
   const mode=S.modalMode;
-  // Ensure correct flags based on freq
+  // Set correct flags
   if(f.tipo==='deuda'){
-    if(f.subtipo==='prestamo'){f.esRecurrente=true;f.esPrestamo=true;}
-    else if(f.freq==='flotante'){f.esRecurrente=false;f.esPrestamo=false;f.subtipo='flotante';}
-    else if(f.freq==='mensual'||f.freq==='quincenal'){f.esRecurrente=true;f.esPrestamo=false;f.subtipo='recurrente';}
-    else{f.esRecurrente=false;f.esPrestamo=false;f.subtipo='simple';}
+    if(f.subtipo==='prestamo'){f.esRecurrente=true;f.esPrestamo=true;f.freq='mensual';}
+    else if(f.freq==='mensual'){f.esRecurrente=true;f.esPrestamo=false;f.subtipo='recurrente';}
+    else if(f.freq==='anual'&&f.esRecurrente){f.esRecurrente=true;f.esPrestamo=false;}
+    else if(f.freq==='flotante'){f.esRecurrente=false;f.esPrestamo=false;}
+    else{f.esRecurrente=false;f.esPrestamo=false;}
   }
   if(mode==='add'){
-    S.entries.push({...f,id:uid(),createdAt:new Date().toISOString()});
+    S.entries.push({...f,id:uid(),createdAt:new Date().toISOString(),aportes:f.aportes||{}});
     if(f.tipo==='ingreso') ajustarSaldo(+f.monto);
     if(f.tipo==='ahorro')  ajustarSaldo(-f.monto);
   }else{
@@ -1052,9 +1050,10 @@ async function unmarkPaid(id,key,virtual){
 //  MODAL / FORM
 // ══════════════════════════════════════════
 function openAddModal(tipo,subtipo){
-  const st=subtipo||'simple';
-  const defaultFreq=tipo==='deuda'?(st==='prestamo'?'mensual':st==='recurrente'?'mensual':'flotante'):'quincenal';
-  S.form={tipo,subtipo:st,concepto:'',monto:'',meta:'',freq:defaultFreq,q:S.period.q,mes:S.period.mes,año:S.period.año,mesInicio:S.period.mes,añoInicio:S.period.año,mesFin:null,añoFin:null,plazoMeses:'',capitalInicial:'',tasaMensual:'',cuota:0,abonoFijo:'',modalidadPrestamo:'plazo',cat:'',acreedor:'',detalles:'',paid:false,notaPago:'',fechaPago:'',pagos:{},provisiones:{}};
+  const isPrestamo=subtipo==='prestamo';
+  const defaultFreq=tipo==='deuda'?(isPrestamo?'mensual':'flotante'):'mensual';
+  const defaultSubtipo=tipo==='deuda'?(isPrestamo?'prestamo':'simple'):'simple';
+  S.form={tipo,subtipo:defaultSubtipo,concepto:'',monto:'',meta:'',freq:defaultFreq,q:1,mes:S.period.mes,año:S.period.año,mesInicio:S.period.mes,añoInicio:S.period.año,mesFin:null,añoFin:null,plazoMeses:'',capitalInicial:'',tasaMensual:'',cuota:0,abonoFijo:'',modalidadPrestamo:'plazo',cat:'',acreedor:'',detalles:'',paid:false,notaPago:'',fechaPago:'',pagos:{},provisiones:{},aportes:{}};
   S.modalMode='add';
   const titles={ingreso:'Nuevo Ingreso',ahorro:'Registrar Ahorro',deuda:'Nueva Deuda'};
   document.getElementById('modal-title').textContent=tipo==='ingreso'?titles.ingreso:tipo==='ahorro'?titles.ahorro:titles.deuda;
@@ -1122,38 +1121,33 @@ function formHTML(){
 
 
   if(isD){
-    // ── Nuevo selector de tipo de deuda ────────────────────────────
+    // ── Tipo de deuda ────────────────────────────────────────────
     h+=`<div class="form-group"><span class="lbl">¿Qué tipo de deuda es?</span>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:4px">
-      <div class="tc${f.freq==='flotante'?' on':''}" style="${f.freq==='flotante'?'border-color:var(--red);background:rgba(248,113,113,.07);':''}" onclick="sfv('freq','flotante')">
-        <div class="tc-icon">📌</div><span class="tc-lbl">Flotante</span>
-        <span class="tc-desc">Sin fecha — siempre visible hasta pagar (tarjeta, deuda personal, etc.)</span>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div class="tc${f.freq==='flotante'?' on':''}" style="${f.freq==='flotante'?'border-color:var(--red);background:rgba(248,113,113,.06);':''}" onclick="sfv('freq','flotante');sfv('subtipo','simple');sfv('esRecurrente',false)">
+        <div class="tc-icon">📌</div><span class="tc-lbl">Flotante — sin fecha</span>
+        <span class="tc-desc">Deuda sin vencimiento fijo. Aparece siempre hasta que la pagues. Ej: tarjeta, deuda personal.</span>
       </div>
-      <div class="tc${f.freq==='mensual'&&f.subtipo!=='prestamo'?' on':''}" style="${f.freq==='mensual'&&f.subtipo!=='prestamo'?'border-color:var(--orange);background:rgba(251,146,60,.07);':''}" onclick="sfv('freq','mensual');sfv('subtipo','recurrente')">
-        <div class="tc-icon">🔄</div><span class="tc-lbl">Mensual</span>
-        <span class="tc-desc">Aparece en Q1 y Q2 cada mes. Podés aportar en cada quincena.</span>
+      <div class="tc${f.freq==='mensual'&&f.subtipo!=='prestamo'?' on':''}" style="${f.freq==='mensual'&&f.subtipo!=='prestamo'?'border-color:var(--orange);background:rgba(251,146,60,.06);':''}" onclick="sfv('freq','mensual');sfv('subtipo','recurrente');sfv('esRecurrente',true)">
+        <div class="tc-icon">🔄</div><span class="tc-lbl">Mensual — se repite cada mes</span>
+        <span class="tc-desc">Aparece todos los meses. Podés pagar completo o ir aportando. Ej: Teléfono, suscripción, caja.</span>
       </div>
-      <div class="tc${f.freq==='quincenal'?' on':''}" style="${f.freq==='quincenal'?'border-color:var(--blue);background:rgba(96,165,250,.07);':''}" onclick="sfv('freq','quincenal');sfv('subtipo','recurrente')">
-        <div class="tc-icon">📅</div><span class="tc-lbl">Quincenal</span>
-        <span class="tc-desc">Solo aparece en la quincena que elijas.</span>
+      <div class="tc${f.freq==='anual'?' on':''}" style="${f.freq==='anual'?'border-color:var(--gold);background:rgba(240,180,41,.06);':''}" onclick="sfv('freq','anual');sfv('subtipo','recurrente');sfv('esRecurrente',true)">
+        <div class="tc-icon">📆</div><span class="tc-lbl">Anual — mismo mes cada año</span>
+        <span class="tc-desc">Aparece una vez al año en el mes que elegís. Podés aportar para no que no te pegue tanto. Ej: seguro vehicular, impuesto, placa.</span>
       </div>
-      <div class="tc${f.freq==='anual'?' on':''}" style="${f.freq==='anual'?'border-color:var(--gold);background:rgba(240,180,41,.07);':''}" onclick="sfv('freq','anual');sfv('subtipo','simple')">
-        <div class="tc-icon">📆</div><span class="tc-lbl">Anual</span>
-        <span class="tc-desc">El mismo mes cada año (seguro, impuestos, etc.)</span>
+      <div class="tc${f.subtipo==='prestamo'?' on':''}" style="${f.subtipo==='prestamo'?'border-color:var(--purple);background:rgba(167,139,250,.06);':''}" onclick="sfv('subtipo','prestamo');sfv('freq','mensual');sfv('esRecurrente',true);sfv('esPrestamo',true)">
+        <div class="tc-icon">🏦</div><span class="tc-lbl">Préstamo con cuota mensual</span>
+        <span class="tc-desc">Cuota fija calculada con interés. Aparece cada mes. Podés aportar la mitad antes si querés. Ej: préstamo banco, microcrédito.</span>
       </div>
-    </div>
-    <div class="tc${f.subtipo==='prestamo'?' on':''}" style="${f.subtipo==='prestamo'?'border-color:var(--purple);background:rgba(167,139,250,.07);':''}width:100%" onclick="sfv('subtipo','prestamo');sfv('freq','mensual')">
-      <div class="tc-icon">🏦</div><span class="tc-lbl">Préstamo con amortización</span>
-      <span class="tc-desc">Cuota fija mensual calculada con interés. Podés aportar en Q1 y Q2.</span>
-    </div>
     </div></div>`;
   }
 
-  h+=`<div class="form-group"><span class="lbl">${isA?'Nombre del objetivo':'Concepto'} *</span><input id="fi-c" value="${esc(f.concepto||'')}" placeholder="${f.subtipo==='prestamo'?'Ej: Préstamo banco':f.freq==='flotante'?'Ej: Tarjeta, deuda pendiente...':f.freq==='mensual'?'Ej: Teléfono, suscripción...':'Ej: Seguro vehicular...'}"></div>`;
+  h+=`<div class="form-group"><span class="lbl">${isA?'Nombre del objetivo':'¿Qué es lo que debés?'} *</span><input id="fi-c" value="${esc(f.concepto||'')}" placeholder="${f.subtipo==='prestamo'?'Ej: Préstamo banco':f.freq==='flotante'?'Ej: Tarjeta, deuda pendiente...':f.freq==='mensual'?'Ej: Teléfono, suscripción...':'Ej: Seguro vehicular...'}"></div>`;
 
   if(isD&&f.subtipo==='prestamo'){
     const mod=f.modalidadPrestamo||'plazo',cap=parseFloat(f.capitalInicial)||0,tasa=parseFloat(f.tasaMensual)||0;
-    h+=`<div class="form-group"><span class="lbl">Modalidad</span><div class="seg">
+    h+=`<div class="form-group"><span class="lbl">Modalidad del préstamo</span><div class="seg">
       <button class="seg-btn${mod==='plazo'?' on':''}" onclick="sfv('modalidadPrestamo','plazo')">📐 Plazo fijo</button>
       <button class="seg-btn${mod==='cuota'?' on':''}" onclick="sfv('modalidadPrestamo','cuota')">💳 Cuota fija</button>
       <button class="seg-btn${mod==='abono'?' on':''}" onclick="sfv('modalidadPrestamo','abono')">📉 Abono fijo</button>
@@ -1164,39 +1158,38 @@ function formHTML(){
     </div>`;
     if(mod==='plazo'){h+=`<div class="form-row" style="margin-top:12px"><div><span class="lbl">Plazo (meses) *</span><input id="fi-plazo" type="number" value="${f.plazoMeses||''}" placeholder="Ej: 24"></div><div><span class="lbl">Cuota calculada</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Pagarás</span><span style="font-weight:700;color:var(--purple)">${$m(f.cuota||0)}</span></div></div></div>`;}
     else if(mod==='cuota'){h+=`<div class="form-row" style="margin-top:12px"><div><span class="lbl">Cuota mensual *</span><input id="fi-cuota-inp" type="number" step="0.01" value="${f.cuota||''}" placeholder="Ej: 500.00"></div><div><span class="lbl">Plazo calculado</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Meses</span><span style="font-weight:700;color:var(--purple)">${f.plazoMeses?f.plazoMeses+' meses':'—'}</span></div></div></div>`;}
-    else{h+=`<div class="form-row" style="margin-top:12px"><div><span class="lbl">Abono al capital *</span><input id="fi-abono" type="number" step="0.01" value="${f.abonoFijo||''}" placeholder="Ej: 100.00"></div><div><span class="lbl">Plazo estimado</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Meses</span><span style="font-weight:700;color:var(--purple)">${f.plazoMeses?f.plazoMeses+' meses':'—'}</span></div></div></div>${cap>0&&(f.abonoFijo||0)>0?`<div style="margin-top:8px;font-size:.76rem;color:var(--t2)">1° pago: <strong style="color:var(--t1)">${$m(R2((f.abonoFijo||0)+R2(cap*(tasa/100))))}</strong></div>`:''}`;}
+    else{h+=`<div class="form-row" style="margin-top:12px"><div><span class="lbl">Abono al capital *</span><input id="fi-abono" type="number" step="0.01" value="${f.abonoFijo||''}" placeholder="Ej: 100.00"></div><div><span class="lbl">Plazo estimado</span><div style="background:rgba(167,139,250,.1);border:1px solid rgba(167,139,250,.22);border-radius:var(--r);padding:10px 13px;display:flex;justify-content:space-between"><span style="font-size:.78rem;color:var(--t2)">Meses</span><span style="font-weight:700;color:var(--purple)">${f.plazoMeses?f.plazoMeses+' meses':'—'}</span></div></div></div>`;}
     if(cap>0&&(f.plazoMeses>0||f.abonoFijo>0)){try{const am=amortTable({...f});h+=`<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--b1);text-align:center"><div><div style="font-size:.63rem;color:var(--t2);margin-bottom:3px">CAPITAL</div><div style="font-weight:700;color:var(--blue)">${$m(cap)}</div></div><div><div style="font-size:.63rem;color:var(--t2);margin-bottom:3px">TOTAL INTERÉS</div><div style="font-weight:700;color:var(--red)">${$m(am.totalInteres)}</div></div><div><div style="font-size:.63rem;color:var(--t2);margin-bottom:3px">PLAZO</div><div style="font-weight:700;color:var(--purple)">${am.rows.length} meses</div></div></div>`;}catch{}}
     h+=`</div>`;
     h+=`<div class="form-row form-group"><div><span class="lbl">Mes inicio</span><select id="fi-mesin">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mesInicio===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año inicio</span><input id="fi-anoin" type="number" value="${f.añoInicio||NOW.getFullYear()}"></div></div>`;
 
   } else if(isD&&f.freq==='flotante'){
-    // Deuda flotante: solo monto y categoría
     h+=`<div class="form-row form-group"><div><span class="lbl">Monto *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div><div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div></div>`;
 
-  } else if(isD&&(f.freq==='mensual'||f.freq==='quincenal')){
-    h+=`<div class="form-row form-group"><div><span class="lbl">Monto *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div><div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div></div>`;
-    if(f.freq==='quincenal') h+=`<div class="form-group"><span class="lbl">Quincena</span><div class="seg"><button class="seg-btn${f.q===1?' on':''}" onclick="sfv('q',1)">Q1 · días 1–15</button><button class="seg-btn${f.q===2?' on':''}" onclick="sfv('q',2)">Q2 · días 16–31</button></div></div>`;
-    if(f.freq==='mensual') h+=`<div style="background:rgba(96,165,250,.07);border:1px solid rgba(96,165,250,.15);border-radius:var(--r);padding:8px 12px;font-size:.78rem;color:var(--t1);margin-bottom:12px">ℹ️ Esta deuda aparecerá en <strong>Q1 y Q2</strong> cada mes. Podés aportar la mitad en Q1 y pagar el resto en Q2.</div>`;
+  } else if(isD&&f.freq==='mensual'){
+    h+=`<div class="form-row form-group"><div><span class="lbl">Monto mensual *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div><div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div></div>`;
     h+=`<div class="form-row form-group"><div><span class="lbl">Mes inicio</span><select id="fi-mesin">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mesInicio===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año inicio</span><input id="fi-anoin" type="number" value="${f.añoInicio||NOW.getFullYear()}"></div></div>`;
     h+=`<div class="form-row form-group"><div><span class="lbl">Mes fin (opcional)</span><select id="fi-mesfin"><option value="">Sin fecha de fin</option>${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mesFin===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año fin</span><input id="fi-anofin" type="number" value="${f.añoFin||''}" placeholder="2027"></div></div>`;
 
   } else if(isD&&f.freq==='anual'){
     h+=`<div class="form-row form-group"><div><span class="lbl">Monto total *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div><div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div></div>`;
-    h+=`<div style="background:rgba(240,180,41,.07);border:1px solid rgba(240,180,41,.15);border-radius:var(--r);padding:8px 12px;font-size:.78rem;color:var(--t1);margin-bottom:12px">📆 Esta deuda aparecerá en el mes que elegís, <strong>todos los años</strong>. Aparece en Q1 y Q2 de ese mes.</div>`;
-    h+=`<div class="form-row form-group"><div><span class="lbl">Mes en que vence</span><select id="fi-mes">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mes===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año (primera vez)</span><input id="fi-ano" type="number" value="${f.año||NOW.getFullYear()}"></div></div>`;
+    h+=`<div class="form-row form-group"><div><span class="lbl">¿En qué mes vence?</span><select id="fi-mes">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mes===i+1?' selected':''}>${m}</option>`).join('')}</select></div><div><span class="lbl">Año (primera vez)</span><input id="fi-ano" type="number" value="${f.año||NOW.getFullYear()}"></div></div>`;
 
   } else if(!isD){
-    // Ingresos y ahorros (sin cambios)
     h+=`<div class="form-row form-group">
       <div><span class="lbl">${isA?'Aporte':'Monto (USD)'} *</span><input id="fi-m" type="number" step="0.01" value="${f.monto||''}" placeholder="0.00"></div>
       ${isA?`<div><span class="lbl">Meta total (opcional)</span><input id="fi-meta" type="number" step="0.01" value="${f.meta||''}" placeholder="Ej: 5000"></div>`:`<div><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${cats.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div>`}
     </div>`;
-    if(isA) h+=`<div class="form-group"><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${CATS.ahorro.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div>`;
-    h+=`<div class="form-group"><span class="lbl">Frecuencia</span><div class="seg"><button class="seg-btn${f.freq==='quincenal'?' on':''}" onclick="sfv('freq','quincenal')">📅 Quincenal</button><button class="seg-btn${f.freq==='mensual'?' on':''}" onclick="sfv('freq','mensual')">🗓 Mensual</button><button class="seg-btn${f.freq==='anual'?' on':''}" onclick="sfv('freq','anual')">📆 Anual</button></div></div>`;
-    if(f.freq==='quincenal') h+=`<div class="form-group"><span class="lbl">Quincena</span><div class="seg"><button class="seg-btn${f.q===1?' on':''}" onclick="sfv('q',1)">Q1 · 1–15</button><button class="seg-btn${f.q===2?' on':''}" onclick="sfv('q',2)">Q2 · 16–31</button></div></div>`;
-    if(f.freq==='mensual'||f.freq==='anual') h+=`<div class="form-group"><span class="lbl">Mes</span><select id="fi-mes">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mes===i+1?' selected':''}>${m}</option>`).join('')}</select></div>`;
-    h+=`<div class="form-group"><span class="lbl">Año</span><input id="fi-ano" type="number" value="${f.año||NOW.getFullYear()}"></div>`;
+    if(isA){
+      h+=`<div class="form-group"><span class="lbl">Categoría</span><select id="fi-cat"><option value="">— Sin categoría</option>${CATS.ahorro.map(c=>`<option${f.cat===c?' selected':''}>${esc(c)}</option>`).join('')}</select></div>`;
+      h+=`<div class="form-group"><span class="lbl">Mes</span><select id="fi-mes">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mes===i+1?' selected':''}>${m}</option>`).join('')}</select></div>`;
+      h+=`<div class="form-group"><span class="lbl">Año</span><input id="fi-ano" type="number" value="${f.año||NOW.getFullYear()}"></div>`;
+    } else {
+      h+=`<div class="form-group"><span class="lbl">Mes</span><select id="fi-mes">${MONTHS.map((m,i)=>`<option value="${i+1}"${f.mes===i+1?' selected':''}>${m}</option>`).join('')}</select></div>`;
+      h+=`<div class="form-group"><span class="lbl">Año</span><input id="fi-ano" type="number" value="${f.año||NOW.getFullYear()}"></div>`;
+    }
   }
+
 
   if(isD) h+=`<div class="form-group"><span class="lbl">Acreedor / Institución</span><input id="fi-acr" value="${esc(f.acreedor||'')}" placeholder="Ej: Banco, tienda, persona..."></div>`;
   h+=`<div class="form-group"><span class="lbl">Notas (opcional)</span><textarea id="fi-det" placeholder="Detalles adicionales...">${esc(f.detalles||'')}</textarea></div>`;
@@ -1306,283 +1299,194 @@ function updateBadge(){
   }
 }
 
-function setMode(mode){
+function setMode(mode){ /* no-op in monthly mode */
   S.period={...S.period,mode};
   renderTab(S.tab);
 }
 
+
 function shiftP(dir){
   const p=S.period;
-  if(p.mode==='mes'){
-    // Mensual mode: navigate month by month
-    if(dir<0){const m=p.mes===1?12:p.mes-1,y=p.mes===1?p.año-1:p.año;S.period={...p,mes:m,año:y};}
-    else{const m=p.mes===12?1:p.mes+1,y=p.mes===12?p.año+1:p.año;S.period={...p,mes:m,año:y};}
-  } else {
-    // Quincenal mode: navigate quincena by quincena
-    if(dir<0){if(p.q===2)S.period={...p,q:1};else{const m=p.mes===1?12:p.mes-1,y=p.mes===1?p.año-1:p.año;S.period={mes:m,año:y,q:2,mode:'q'};}}
-    else{if(p.q===1)S.period={...p,q:2};else{const m=p.mes===12?1:p.mes+1,y=p.mes===12?p.año+1:p.año;S.period={mes:m,año:y,q:1,mode:'q'};}}
-  }
+  if(dir<0){const m=p.mes===1?12:p.mes-1,y=p.mes===1?p.año-1:p.año;S.period={mes:m,año:y};}
+  else{const m=p.mes===12?1:p.mes+1,y=p.mes===12?p.año+1:p.año;S.period={mes:m,año:y};}
   renderTab(S.tab);
 }
-
-function periodLabel(){
-  const p=S.period;
-  return p.mode==='mes'
-    ? `${MONTHS[p.mes-1]} ${p.año}`
-    : `${MONTHS[p.mes-1]} ${p.año} · Q${p.q} (${p.q===1?'1–15':'16–31'})`;
-}
-
+function periodLabel(){ const p=S.period;return `${MONTHS[p.mes-1]} ${p.año}`; }
 function periodBarHTML(extra){
-  const p=S.period;
-  return `<div class="period-bar-wrap" style="display:flex;align-items:center;gap:8px;margin-bottom:20px">
-    <div class="seg" style="flex-shrink:0">
-      <button class="seg-btn${p.mode==='q'?' on':''}" onclick="setMode('q')">📅 Quincena</button>
-      <button class="seg-btn${p.mode==='mes'?' on':''}" onclick="setMode('mes')">📆 Mes</button>
-    </div>
-    <button class="btn btn-ghost btn-sm" onclick="shiftP(-1)" style="padding:6px 14px;flex-shrink:0">‹</button>
-    <span style="font-size:.88rem;font-weight:600;color:var(--gold);letter-spacing:.03em;white-space:nowrap">${periodLabel()}</span>
-    <button class="btn btn-ghost btn-sm" onclick="shiftP(1)" style="padding:6px 14px;flex-shrink:0">›</button>
+  return `<div style="display:flex;align-items:center;gap:10px;margin-bottom:20px">
+    <button class="btn btn-ghost btn-sm" onclick="shiftP(-1)" style="padding:7px 16px;font-size:1rem">‹</button>
+    <span style="flex:1;text-align:center;font-size:1rem;font-weight:600;color:var(--gold);letter-spacing:.03em">${periodLabel()}</span>
+    <button class="btn btn-ghost btn-sm" onclick="shiftP(1)" style="padding:7px 16px;font-size:1rem">›</button>
     ${extra||''}
   </div>`;
 }
+
+
 
 // ══════════════════════════════════════════
 //  HOME TAB
 // ══════════════════════════════════════════
 function homeHTML(t){
   const goals=savingsGoals(),totalAh=goals.reduce((s,g)=>s+g.total,0);
-  const pctPaid=t.tD>0?pct(t.tPaid,t.tD):0,pend=t.deu.filter(d=>!d.paid);
-  const p=S.period;
-  const provisions=getProvisions();
-  const isMes=p.mode==='mes';
-  const totalApartado=provisions.filter(d=>d._apartado).reduce((s,d)=>s+d.monto,0);
+  const pend=t.deu.filter(d=>!d.paid);
+  const pctPaid=t.tD>0?pct(t.tPaid,t.tD):0;
   return `
-  ${periodBarHTML(`<span style="margin-left:auto;font-size:.75rem;color:var(--t2)">📄 ${esc(S.fileName||'sin archivo')}</span>`)}
+  ${periodBarHTML('<span style="margin-left:auto;font-size:.75rem;color:var(--t2)">📄 '+esc(S.fileName||'sin archivo')+'</span>')}
 
-  <!-- Saldo actual banner (if registered) -->
-  ${t.hasSaldo?`<div class="card pad-sm" style="margin-bottom:16px;border:1px solid rgba(52,211,153,.2);background:rgba(52,211,153,.04)">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+  <!-- Balance real -->
+  ${t.hasSaldo?`<div class="card pad-sm" style="margin-bottom:14px;border:1px solid rgba(52,211,153,.2);background:rgba(52,211,153,.04)">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
       <div>
-        <div style="font-size:.68rem;color:var(--green);text-transform:uppercase;letter-spacing:.1em;font-weight:600;margin-bottom:4px">💰 Saldo actual registrado</div>
-        <div style="font-size:1.4rem;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums">${$m(t.saldo)}</div>
-        <div style="font-size:.78rem;color:var(--t2);margin-top:2px">
-          Pagando todo pendiente quedarías con <strong style="color:${t.balProy>=0?'var(--green)':'var(--red)'}">${$m(t.balProy)}</strong>
-        </div>
+        <div style="font-size:.68rem;color:var(--green);text-transform:uppercase;letter-spacing:.1em;font-weight:600;margin-bottom:4px">💰 Saldo actual</div>
+        <div style="font-size:1.5rem;font-weight:700;color:${t.saldo>=0?'var(--green)':'var(--red)'};font-variant-numeric:tabular-nums">${$m(t.saldo)}</div>
+        <div style="font-size:.75rem;color:var(--t2);margin-top:2px">Si pagás todo este mes: <strong style="color:${t.balProy>=0?'var(--teal)':'var(--red)'}">${$m(t.balProy)}</strong></div>
       </div>
       <button class="btn btn-ghost btn-sm" onclick="openSaldoModal()" style="color:var(--green);border-color:rgba(52,211,153,.25)">Actualizar</button>
     </div>
-  </div>`:`<div style="margin-bottom:16px">
-    <button class="btn btn-ghost btn-sm" onclick="openSaldoModal()" style="color:var(--teal);border-color:rgba(45,212,191,.25);width:100%;justify-content:center;padding:10px">
-      💰 Registrar saldo actual (¿cuánto tenés ahora en tu cuenta?)
-    </button>
-  </div>`}
+  </div>`:`<button class="btn btn-ghost btn-sm" onclick="openSaldoModal()" style="color:var(--teal);border-color:rgba(45,212,191,.25);width:100%;justify-content:center;padding:10px;margin-bottom:14px">
+    💰 Registrar saldo actual
+  </button>`}
 
-  <!-- Summary cards -->
-  <div class="cards-grid">
-    ${[
-      {l:isMes?'Ingresos del mes':'Ingresos del período',v:t.tI,c:'var(--green)',s:`${t.ing.length} registro${t.ing.length!==1?'s':''}`,click:''},
-      {l:'Por pagar',v:t.tPend,c:'var(--red)',s:`${pend.length} pendiente${pend.length!==1?'s':''}`,click:"switchTab('pagos')"},
-      {l:'Pagado',v:t.tPaid,c:'var(--orange)',s:`${t.deu.filter(d=>d.paid).length} pagado${t.deu.filter(d=>d.paid).length!==1?'s':''}`,click:''},
-      {l:t.hasSaldo?'Disponible real':'Disponible est.',v:t.balDisp,c:t.balDisp>=0?'var(--green)':'var(--red)',s:t.hasSaldo?`desde saldo ${$m(t.saldo)}`:`Proyectado: ${$m(t.balProy)}`,click:''},
-    ].map(c=>`<div class="sum-card${c.click?' link':''}" style="--c:${c.c}" ${c.click?`onclick="${c.click}"`:''}>
-      <div class="sc-lbl">${c.l}</div>
-      <div class="sc-val">${$m(c.v)}</div>
-      <div class="sc-sub">${c.s}</div>
-    </div>`).join('')}
+  <!-- Resumen mes -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+    <div class="card pad-sm" style="border-top:2px solid var(--green)">
+      <div class="sc-lbl">Ingresos del mes</div>
+      <div style="font-size:1.15rem;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums">${$m(t.tI)}</div>
+      <div class="sc-sub">${t.ing.length} registro${t.ing.length!==1?'s':''}</div>
+    </div>
+    <div class="card pad-sm" style="border-top:2px solid var(--red)">
+      <div class="sc-lbl">Por pagar este mes</div>
+      <div style="font-size:1.15rem;font-weight:700;color:var(--red);font-variant-numeric:tabular-nums">${$m(t.tPend)}</div>
+      <div class="sc-sub">${pend.length} pendiente${pend.length!==1?'s':''}</div>
+    </div>
   </div>
 
-  <div class="two-col">
-    <!-- Left column -->
-    <div>
-      ${t.tD>0?`<div class="card pad-sm" style="margin-bottom:18px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-          <span style="font-size:.82rem;font-weight:600;color:var(--t1)">Progreso del período</span>
-          <span style="font-size:.85rem;font-weight:700;color:${pctPaid===100?'var(--green)':'var(--orange)'}">${pctPaid}%</span>
-        </div>
-        <div class="prog prog-lg"><div class="prog-fill" style="width:${pctPaid}%;background:${pctPaid===100?'var(--green)':'var(--orange)'}"></div></div>
-        <div class="prog-meta"><span>${$m(t.tPaid)} pagado</span><span>${$m(t.tPend)} pendiente</span></div>
-      </div>`:''}
-
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <span style="font-size:.82rem;font-weight:600;color:var(--t1);text-transform:uppercase;letter-spacing:.06em">Por pagar</span>
-        <button class="btn btn-ghost btn-xs" onclick="switchTab('pagos')">Ver todo →</button>
-      </div>
-      ${pend.length===0?`<div class="card pad" style="text-align:center">
-        <div style="font-size:1.8rem;margin-bottom:8px;opacity:.2">🎉</div>
-        <div style="font-size:.9rem;font-weight:500;color:var(--t1)">Todo pagado este período</div>
-      </div>`:pend.slice(0,5).map(d=>`<div class="di pend">
-        <div class="di-hd">
-          <div class="di-dot" style="background:rgba(248,113,113,.65)"></div>
-          <div class="di-title">
-            <span class="di-name">${esc(d.concepto)}</span>
-            <span class="di-sub">${d.acreedor?esc(d.acreedor):''}${d._inst?` · Cuota ${d._inst.num}/${d._inst.total}`:''}</span>
-          </div>
-          <div class="di-amt" style="color:var(--red)">${$m(d.monto)}</div>
-        </div>
-        <div class="di-foot">
-          <button class="pay-btn" onclick="openPayModal('${d.id}','${d._key||''}')">💳 Pagar</button>
-        </div>
-      </div>`).join('')}
-      ${pend.length>5?`<p style="text-align:center;font-size:.78rem;color:var(--t2);padding:10px 0;cursor:pointer" onclick="switchTab('pagos')">+${pend.length-5} más pendientes →</p>`:''}
-
-      <!-- Provision / Apartar section (only in Q1 quincenal view) -->
-      ${provisions.length>0?`<div style="margin-top:20px">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-          <span style="font-size:.8rem;font-weight:600;color:var(--gold);text-transform:uppercase;letter-spacing:.06em">💡 Apartá ahora — vence en Q2</span>
-          ${totalApartado>0?`<span style="font-size:.75rem;color:var(--green)">✓ ${$m(totalApartado)} apartado</span>`:''}
-        </div>
-        <div style="font-size:.78rem;color:var(--t2);margin-bottom:10px">
-          Estos pagos son mensuales y vencen en la segunda quincena. Marcá los que ya reservaste.
-        </div>
-        ${provisions.map(d=>`<div class="di" style="border-left:3px solid ${d._apartado?'rgba(52,211,153,.5)':'rgba(240,180,41,.4)'};${d._apartado?'opacity:.8':''}">
-          <div class="di-main">
-            <div class="di-dot" style="background:${d._apartado?'var(--green)':'rgba(240,180,41,.6)'}"></div>
-            <div class="di-body">
-              <div class="di-name" style="color:${d._apartado?'var(--t2)':'var(--t0)'};${d._apartado?'text-decoration:line-through':''}">${esc(d.concepto)}</div>
-              <div class="di-meta">
-                <span class="pill" style="background:${d._apartado?'rgba(52,211,153,.1)':'rgba(240,180,41,.1)'};color:${d._apartado?'var(--green)':'var(--gold)'}">
-                  ${d._apartado?'✓ Apartado':'Mitad ahora · pago Q2'}
-                </span>
-                ${d.acreedor?`<span style="opacity:.5">·</span><span>${esc(d.acreedor)}</span>`:''}
-              </div>
-            </div>
-            <div class="di-right">
-              <div class="di-amount" style="color:${d._apartado?'var(--green)':'var(--gold)'}">${$m(d.monto)}</div>
-              <div style="font-size:.7rem;color:var(--t2)">de ${$m(d._fullMonto)}</div>
-              <button onclick="marcarApartado('${d.id}','${d._pk}')" style="background:${d._apartado?'transparent':'rgba(240,180,41,.12)'};border:1px solid ${d._apartado?'var(--b2)':'rgba(240,180,41,.35)'};color:${d._apartado?'var(--t2)':'var(--gold)'};border-radius:var(--r);padding:5px 10px;cursor:pointer;font-family:var(--font);font-size:.78rem;font-weight:500;white-space:nowrap;transition:all .15s">
-                ${d._apartado?'↺ Desmarcar':'✓ Apartar'}
-              </button>
-            </div>
-          </div>
-        </div>`).join('')}
-      </div>`:''}
+  ${t.tD>0?`<div class="card pad-sm" style="margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+      <span style="font-size:.82rem;font-weight:600;color:var(--t1)">Progreso del mes</span>
+      <span style="font-size:.82rem;font-weight:700;color:${pctPaid===100?'var(--green)':'var(--orange)'}">${pctPaid}%</span>
     </div>
+    <div class="prog prog-lg"><div class="prog-fill" style="width:${pctPaid}%;background:${pctPaid===100?'var(--green)':'var(--orange)'}"></div></div>
+    <div class="prog-meta"><span>${$m(t.tPaid)} pagado</span><span>${$m(t.tPend)} pendiente</span></div>
+  </div>`:''}
 
-    <!-- Right column -->
-    <div>
-      ${goals.length>0?`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <span style="font-size:.82rem;font-weight:600;color:var(--t1);text-transform:uppercase;letter-spacing:.06em">Ahorros · ${$m(totalAh)}</span>
-        <button class="btn btn-ghost btn-xs" onclick="switchTab('ahorros')">Ver todo →</button>
+  <!-- Pendientes -->
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <span style="font-size:.8rem;font-weight:600;color:var(--t1);text-transform:uppercase;letter-spacing:.06em">Por pagar</span>
+    <button class="btn btn-ghost btn-xs" onclick="switchTab('pagos')">Ver todo →</button>
+  </div>
+  ${pend.length===0?`<div class="card pad" style="text-align:center;margin-bottom:16px">
+    <div style="font-size:1.8rem;opacity:.18;margin-bottom:8px">🎉</div>
+    <div style="font-size:.9rem;font-weight:500;color:var(--t1)">Todo al día este mes</div>
+  </div>`:pend.slice(0,4).map(d=>`<div class="di pend">
+    <div class="di-hd">
+      <div class="di-dot" style="background:rgba(248,113,113,.65)"></div>
+      <div class="di-title">
+        <span class="di-name">${esc(d.concepto)}</span>
+        <span class="di-sub">${d._flotante?'📌 Flotante':d.esPrestamo?`🏦 Cuota ${d._inst?.num||''}/${d._inst?.total||''}`:d.freq==='anual'?'📆 Anual':'🔄 Mensual'}${d.acreedor?' · '+esc(d.acreedor):''}</span>
       </div>
-      ${goals.slice(0,4).map(g=>{const p2=g.meta>0?pct(g.total,g.meta):null;return`<div class="card pad-sm" style="margin-bottom:8px;border-left:2px solid rgba(45,212,191,.35)">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${p2!==null?'7px':'0'}">
-          <span style="font-size:.88rem;font-weight:500">${esc(g.nombre)}</span>
-          <span style="font-weight:700;color:var(--teal)">${$m(g.total)}${g.meta>0?`<span style="font-size:.72rem;color:var(--t2);font-weight:400"> / ${$m(g.meta)}</span>`:''}</span>
-        </div>
-        ${p2!==null?`<div class="prog"><div class="prog-fill" style="width:${p2}%;background:${p2>=100?'var(--green)':'var(--teal)'}"></div></div>`:''}</div>`;}).join('')}`:''}
-
-      <div style="display:flex;justify-content:space-between;align-items:center;margin:${goals.length>0?'18px':'0'} 0 10px">
-        <span style="font-size:.82rem;font-weight:600;color:var(--t1);text-transform:uppercase;letter-spacing:.06em">Agregar</span>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <button class="btn btn-ghost btn-sm" onclick="openAddModal('ingreso')" style="justify-content:center">↑ Ingreso</button>
-        <button class="btn btn-ghost btn-sm" onclick="openAddModal('deuda','simple')" style="justify-content:center;color:var(--red);border-color:rgba(248,113,113,.2)">⚠ Deuda</button>
-        <button class="btn btn-ghost btn-sm" onclick="openAddModal('deuda','recurrente')" style="justify-content:center;color:var(--orange);border-color:rgba(251,146,60,.2)">🔄 Recurrente</button>
-        <button class="btn btn-ghost btn-sm" onclick="openAddModal('deuda','prestamo')" style="justify-content:center;color:var(--purple);border-color:rgba(167,139,250,.2)">🏦 Préstamo</button>
-        <button class="btn btn-ghost btn-sm" onclick="openAddModal('ahorro')" style="justify-content:center;grid-column:1/-1;color:var(--teal);border-color:rgba(45,212,191,.2)">🏦 Registrar ahorro</button>
-      </div>
+      <div class="di-amt" style="color:var(--red)">${$m(d.monto)}</div>
     </div>
+    ${d._totalAportado>0?`<div style="padding:4px 12px 4px 30px;font-size:.72rem"><span style="background:rgba(52,211,153,.1);color:var(--green);padding:2px 8px;border-radius:20px">✓ ${$m(d._totalAportado)} aportado</span></div>`:''}
+    <div class="di-foot">
+      ${!d._flotante&&d._montoTotal>0&&d.monto>0?`<button class="btn btn-ghost btn-xs" onclick="openAporteModal('${d.id}')" style="color:var(--gold)">Aportar</button>`:''}
+      <button class="pay-btn" onclick="openPayModal('${d.id}','${d._key||''}')">💳 Pagar</button>
+    </div>
+  </div>`).join('')}
+  ${pend.length>4?`<p style="text-align:center;font-size:.78rem;color:var(--t2);padding:8px 0;cursor:pointer" onclick="switchTab('pagos')">+${pend.length-4} más →</p>`:''}
+
+  <!-- Ahorros preview -->
+  ${goals.length>0?`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;margin-top:4px">
+    <span style="font-size:.8rem;font-weight:600;color:var(--t1);text-transform:uppercase;letter-spacing:.06em">Ahorros · ${$m(totalAh)}</span>
+    <button class="btn btn-ghost btn-xs" onclick="switchTab('ahorros')">Ver →</button>
+  </div>
+  ${goals.slice(0,2).map(g=>{const p2=g.meta>0?pct(g.total,g.meta):null;return`<div class="card pad-sm" style="margin-bottom:8px;border-left:2px solid rgba(45,212,191,.35)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${p2!==null?'7px':'0'}">
+      <span style="font-size:.88rem;font-weight:500">${esc(g.nombre)}</span>
+      <span style="font-weight:700;color:var(--teal)">${$m(g.total)}${g.meta>0?`<span style="font-size:.72rem;color:var(--t2)"> / ${$m(g.meta)}</span>`:''}</span>
+    </div>
+    ${p2!==null?`<div class="prog"><div class="prog-fill" style="width:${p2}%;background:${p2>=100?'var(--green)':'var(--teal)'}"></div></div>`:''}</div>`;}).join('')}`:''}
+
+  <!-- Quick add -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px">
+    <button class="btn btn-ghost btn-sm" onclick="openAddModal('ingreso')" style="justify-content:center">↑ Ingreso</button>
+    <button class="btn btn-ghost btn-sm" onclick="openAddModal('deuda')" style="justify-content:center;color:var(--red);border-color:rgba(248,113,113,.2)">+ Deuda</button>
+    <button class="btn btn-ghost btn-sm" onclick="openAddModal('deuda','prestamo')" style="justify-content:center;color:var(--purple);border-color:rgba(167,139,250,.2)">🏦 Préstamo</button>
+    <button class="btn btn-ghost btn-sm" onclick="openAddModal('ahorro')" style="justify-content:center;color:var(--teal);border-color:rgba(45,212,191,.2)">🏦 Ahorro</button>
   </div>`;
 }
 
-// ══════════════════════════════════════════
-//  PAGOS TAB
-// ══════════════════════════════════════════
 function pagosHTML(t){
   const pend=t.deu.filter(d=>!d.paid).sort((a,b)=>b.monto-a.monto);
   const paid=t.deu.filter(d=>d.paid).sort((a,b)=>b.monto-a.monto);
   const pctDone=t.tD>0?pct(t.tPaid,t.tD):0;
-  const provisions=getProvisions();
-  const p=S.period;
 
-  const pill=(txt,color,bg)=>`<span class="pill" style="background:${bg};color:${color};font-size:.68rem;padding:2px 7px">${txt}</span>`;
-  const freqBadge=(d)=>{
-    if(d._flotante) return pill("📌 Flotante","var(--red)","rgba(248,113,113,.1)");
-    if(d.esPrestamo) return pill("🏦 Préstamo","var(--purple)","rgba(167,139,250,.12)");
-    if(d.freq==="mensual") return pill("🔄 Mensual","var(--orange)","rgba(251,146,60,.1)");
-    if(d.freq==="quincenal") return pill(`📅 Q${d.q}`,"var(--gold)","rgba(240,180,41,.1)");
-    if(d.freq==="anual") return pill("📆 Anual","var(--blue)","rgba(96,165,250,.1)");
-    return "";
-  };
+  const freqLabel=(d)=>d._flotante?'📌 Flotante':d.esPrestamo?`🏦 Cuota ${d._inst?.num||'?'}/${d._inst?.total||'?'}`:d.freq==='anual'?'📆 Anual':'🔄 Mensual';
 
-  const debtCard=(d,isPaid)=>`<div class="di ${isPaid?"done":"pend"}">
+  const debtCard=(d,isPaid)=>`<div class="di ${isPaid?'done':'pend'}">
     <div class="di-hd">
-      <div class="di-dot" style="background:${isPaid?"var(--green)":"rgba(248,113,113,.65)"}"></div>
+      <div class="di-dot" style="background:${isPaid?'var(--green)':'rgba(248,113,113,.65)'}"></div>
       <div class="di-title">
-        <span class="di-name${isPaid?" crossed":""}">${esc(d.concepto)}</span>
-        <span class="di-sub">${[d.acreedor?esc(d.acreedor):"",d._inst?`Cuota ${d._inst.num}/${d._inst.total}`:"",isPaid&&d.fechaPago?`✓ ${d.fechaPago}`:""].filter(Boolean).join(" · ")}</span>
+        <span class="di-name${isPaid?' crossed':''}">${esc(d.concepto)}</span>
+        <span class="di-sub">${freqLabel(d)}${d.acreedor?' · '+esc(d.acreedor):''}${isPaid&&d.fechaPago?' · ✓ '+d.fechaPago:''}</span>
       </div>
-      <div class="di-amt" style="color:${isPaid?"var(--green)":"var(--red)"}">
+      <div class="di-amt" style="color:${isPaid?'var(--green)':'var(--red)'}">
         ${$m(d.monto)}
-        ${d._totalAportado>0&&!isPaid?`<div style="font-size:.65rem;color:var(--t2);text-align:right">de ${$m((d._montoTotal||0)+d._totalAportado||d.monto)}</div>`:""}
+        ${d._totalAportado>0&&!isPaid?`<div style="font-size:.65rem;color:var(--t2);text-align:right">Total: ${$m(d._montoTotal||d.monto)}</div>`:''}
       </div>
     </div>
-    <div class="di-tags">
-      ${freqBadge(d)}
-      ${d._totalAportado>0&&!isPaid?pill(`✓ ${$m(d._totalAportado)} aportado`,"var(--green)","rgba(52,211,153,.08)"):""}
-    </div>
+    ${d._totalAportado>0&&!isPaid?`<div style="padding:4px 12px 6px 30px"><span style="background:rgba(52,211,153,.1);color:var(--green);font-size:.72rem;padding:2px 8px;border-radius:20px">✓ ${$m(d._totalAportado)} aportado</span></div>`:''}
     ${d._inst&&d._inst.interes>0&&!isPaid?`<div class="di-breakdown">
       <div class="di-bc"><div class="bclbl">Interés</div><div class="bcval" style="color:var(--red)">${$m(d._inst.interes)}</div></div>
       <div class="di-bc"><div class="bclbl">Capital</div><div class="bcval" style="color:var(--blue)">${$m(d._inst.capital)}</div></div>
       <div class="di-bc"><div class="bclbl">Saldo préstamo</div><div class="bcval" style="color:var(--t1)">${$m(d._inst.saldoDespues)}</div></div>
-    </div>`:""}
+    </div>`:''}
     <div class="di-foot">
-      ${!d._virtual?`<button class="ib" onclick="openEditModal('${d.id}')">✎</button><button class="ib ib-del" onclick="showDelModal('${d.id}')">✕</button>`:""}
+      ${!d._virtual?`<button class="ib" onclick="openEditModal('${d.id}')">✎</button><button class="ib ib-del" onclick="showDelModal('${d.id}')">✕</button>`:''}
       ${isPaid
-        ?`<button class="unpay-btn" onclick="unmarkPaid('${d.id}','${d._key||""}',${!!d._virtual})">↺ Desmarcar</button>`
-        :`<button class="pay-btn" onclick="openPayModal('${d.id}','${d._key||""}')">💳 Pagar</button>`}
+        ?`<button class="unpay-btn" onclick="unmarkPaid('${d.id}','${d._key||''}',${!!d._virtual})">↺ Desmarcar</button>`
+        :`${d._montoTotal>d.monto||false?`<button class="btn btn-ghost btn-xs" onclick="openAporteModal('${d.id}')" style="color:var(--gold)">Aportar</button>`:''}<button class="pay-btn" onclick="openPayModal('${d.id}','${d._key||''}')">💳 Pagar</button>`}
     </div>
   </div>`;
 
   return `
   ${periodBarHTML()}
+
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
     <div class="card pad-sm" style="border-top:2px solid var(--red)">
       <div class="sc-lbl">Por pagar</div>
       <div style="font-size:1.2rem;font-weight:700;color:var(--red);font-variant-numeric:tabular-nums">${$m(t.tPend)}</div>
-      <div class="sc-sub">${pend.length} pendiente${pend.length!==1?"s":""}</div>
+      <div class="sc-sub">${pend.length} deuda${pend.length!==1?'s':''}</div>
     </div>
-    <div class="card pad-sm" style="border-top:2px solid ${t.hasSaldo?(t.saldo>=0?"var(--green)":"var(--red)"):"var(--t2)"}">
-      <div class="sc-lbl">Saldo disponible</div>
-      <div style="font-size:1.2rem;font-weight:700;color:${t.hasSaldo?(t.saldo>=0?"var(--green)":"var(--red)"):"var(--t2)"};font-variant-numeric:tabular-nums">${t.hasSaldo?$m(t.saldo):"Sin registro"}</div>
-      <div class="sc-sub">${t.hasSaldo?`Proyectado: ${$m(t.balProy)}`:"Registrá tu saldo"}</div>
+    <div class="card pad-sm" style="border-top:2px solid ${t.hasSaldo?(t.saldo>=0?'var(--green)':'var(--red)'):'var(--t2)'}">
+      <div class="sc-lbl">Saldo actual</div>
+      <div style="font-size:1.2rem;font-weight:700;color:${t.hasSaldo?(t.saldo>=0?'var(--green)':'var(--red)'):'var(--t2)'};font-variant-numeric:tabular-nums">${t.hasSaldo?$m(t.saldo):'—'}</div>
+      <div class="sc-sub">${t.hasSaldo?`Si pagás todo: ${$m(t.balProy)}`:'<button onclick="openSaldoModal()" style="background:none;border:none;color:var(--gold);cursor:pointer;font-size:.72rem;font-family:var(--font)">Registrar saldo</button>'}</div>
     </div>
   </div>
-  ${t.tD>0?`<div class="card pad-sm" style="margin-bottom:12px">
+
+  ${t.tD>0?`<div class="card pad-sm" style="margin-bottom:14px">
     <div style="display:flex;justify-content:space-between;margin-bottom:6px">
-      <span style="font-size:.8rem;font-weight:600;color:var(--t1)">Progreso</span>
-      <span style="font-size:.8rem;font-weight:700;color:${pctDone===100?"var(--green)":"var(--orange)"}">${pctDone}%</span>
+      <span style="font-size:.8rem;font-weight:600;color:var(--t1)">Progreso del mes</span>
+      <span style="font-size:.8rem;font-weight:700;color:${pctDone===100?'var(--green)':'var(--orange)'}">${pctDone}%</span>
     </div>
-    <div class="prog prog-lg"><div class="prog-fill" style="width:${pctDone}%;background:${pctDone===100?"var(--green)":"var(--orange)"}"></div></div>
+    <div class="prog prog-lg"><div class="prog-fill" style="width:${pctDone}%;background:${pctDone===100?'var(--green)':'var(--orange)'}"></div></div>
     <div class="prog-meta"><span>${$m(t.tPaid)} pagado</span><span>${$m(t.tPend)} pendiente</span></div>
-  </div>`:""}
-  ${provisions.length>0&&p.mode==="q"?`<div style="background:rgba(240,180,41,.05);border:1px solid rgba(240,180,41,.18);border-radius:var(--r-md);padding:12px;margin-bottom:12px">
-    <div style="font-size:.8rem;font-weight:600;color:var(--gold);margin-bottom:10px">💡 Aportar ahora — Q${p.q}</div>
-    ${provisions.map(d=>`<div class="di" style="border-left:3px solid ${d._apartado?"rgba(52,211,153,.5)":"rgba(240,180,41,.4)"}">
-      <div class="di-hd">
-        <div class="di-dot" style="background:${d._apartado?"var(--green)":"rgba(240,180,41,.6)"}"></div>
-        <div class="di-title">
-          <span class="di-name" style="color:${d._apartado?"var(--t2)":"var(--t0)"};${d._apartado?"text-decoration:line-through":""}">${esc(d.concepto)}</span>
-          <span class="di-sub">Total: ${$m(d._fullMonto)}${d._totalAportado>0?" · Aportado: "+$m(d._totalAportado):""}</span>
-        </div>
-        <div class="di-amt" style="color:${d._apartado?"var(--green)":"var(--gold)"}">${$m(d.monto)}</div>
-      </div>
-      <div class="di-foot">
-        <button onclick="marcarApartado('${d.id}','${d._pk}')" style="background:${d._apartado?"transparent":"rgba(240,180,41,.12)"};border:1px solid ${d._apartado?"var(--b2)":"rgba(240,180,41,.35)"};color:${d._apartado?"var(--t2)":"var(--gold)"};border-radius:var(--r);padding:6px 14px;cursor:pointer;font-family:var(--font);font-size:.82rem;font-weight:500">
-          ${d._apartado?"↺ Revertir aporte":"✓ Aportar "+$m(d.monto)}
-        </button>
-      </div>
-    </div>`).join("")}
-  </div>`:""}
+  </div>`:''}
+
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-    <span style="font-size:.8rem;font-weight:600;color:var(--red);text-transform:uppercase;letter-spacing:.06em">Por pagar</span>
+    <span style="font-size:.8rem;font-weight:600;color:var(--red);text-transform:uppercase;letter-spacing:.06em">Por pagar · ${$m(t.tPend)}</span>
     <button class="btn btn-ghost btn-xs" onclick="openAddModal('deuda')">+ Deuda</button>
   </div>
+
   ${pend.length===0
-    ?`<div class="card pad" style="text-align:center;margin-bottom:16px"><div style="font-size:2rem;opacity:.18;margin-bottom:8px">🎉</div><div style="font-size:.9rem;color:var(--t1);font-weight:500">Todo pagado este período</div></div>`
-    :pend.map(d=>debtCard(d,false)).join("")}
-  ${paid.length>0?`<div style="font-size:.8rem;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 10px">✓ Pagado</div>${paid.map(d=>debtCard(d,true)).join("")}`:""}`;
+    ?`<div class="card pad" style="text-align:center;margin-bottom:16px"><div style="font-size:2rem;opacity:.18;margin-bottom:8px">🎉</div><div style="font-size:.9rem;color:var(--t1);font-weight:500">Todo al día este mes</div></div>`
+    :pend.map(d=>debtCard(d,false)).join('')}
+
+  ${paid.length>0?`<div style="font-size:.8rem;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 10px">✓ Pagado este mes · ${$m(t.tPaid)}</div>${paid.map(d=>debtCard(d,true)).join('')}`:''}
+  `;
 }
+
 
 function deudasHTML(t){
   const smartDebts=S.entries.filter(e=>e.tipo==='deuda'&&e.esRecurrente);
