@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>FinanzasQ</title>
 <!-- PWA -->
 <link rel="manifest" href="manifest.json">
@@ -96,24 +96,34 @@ html,body{height:100%;background:var(--bg);font-family:var(--font);color:var(--t
 .row-item{display:grid;gap:10px;padding:11px 16px;border-bottom:1px solid rgba(255,255,255,.04);align-items:center;transition:background .1s}
 .row-item:hover{background:rgba(255,255,255,.025)}.row-item:last-child{border-bottom:none}
 
-/* ── Debt cards – redesigned (no circles) ── */
-.di{background:var(--card);border:1px solid var(--b1);border-left:3px solid transparent;border-radius:var(--r-md);margin-bottom:8px;transition:border-color .12s;overflow:hidden}
-.di:hover{border-color:var(--b2)}
+/* ── Debt cards – mobile-first ── */
+.di{background:var(--card);border:1px solid var(--b1);border-left:3px solid transparent;border-radius:var(--r-md);margin-bottom:8px;overflow:hidden}
 .di.pend{border-left-color:rgba(248,113,113,.55)}
-.di.done{border-left-color:rgba(52,211,153,.45);opacity:.76}
-.di-main{display:flex;align-items:center;gap:12px;padding:12px 14px;min-height:0}
-.di-dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px;align-self:center}
-.di-body{flex:1;min-width:0}
-.di-name{font-size:.9rem;font-weight:500;color:var(--t0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.di.done{border-left-color:rgba(52,211,153,.45);opacity:.75}
+/* Header: dot | name | amount — all on one line, always */
+.di-hd{display:flex;align-items:center;gap:9px;padding:12px 12px 5px}
+.di-dot{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+.di-title{flex:1;min-width:0;overflow:hidden}
+.di-name{font-size:.88rem;font-weight:500;color:var(--t0);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block}
 .di-name.crossed{text-decoration:line-through;color:var(--t2)}
-.di-meta{font-size:.74rem;color:var(--t2);display:flex;flex-wrap:wrap;gap:5px;margin-top:3px;align-items:center}
-.di-right{display:flex;align-items:center;gap:8px;flex-shrink:0}
-.di-amount{font-size:1rem;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.di-sub{font-size:.72rem;color:var(--t2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;margin-top:1px}
+.di-amt{font-size:.95rem;font-weight:700;font-variant-numeric:tabular-nums;flex-shrink:0;white-space:nowrap;padding-left:6px}
+/* Tags row */
+.di-tags{padding:0 12px 6px 29px;display:flex;flex-wrap:wrap;gap:4px}
+/* Actions footer */
+.di-foot{display:flex;align-items:center;justify-content:flex-end;gap:6px;padding:8px 10px;border-top:1px solid var(--b1)}
+/* Loan breakdown */
 .di-breakdown{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid var(--b1);background:rgba(255,255,255,.018)}
-.di-bc{padding:8px 10px;text-align:center}
-.di-bc .bclbl{font-size:.61rem;color:var(--t2);text-transform:uppercase;letter-spacing:.07em;margin-bottom:3px}
-.di-bc .bcval{font-size:.84rem;font-weight:700;font-variant-numeric:tabular-nums}
-.di-note{font-size:.72rem;color:var(--t2);padding:5px 14px 8px 34px;border-top:1px solid var(--b1)}
+.di-bc{padding:8px 6px;text-align:center}
+.di-bc .bclbl{font-size:.6rem;color:var(--t2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:3px}
+.di-bc .bcval{font-size:.82rem;font-weight:700;font-variant-numeric:tabular-nums}
+.di-note{font-size:.72rem;color:var(--t2);padding:5px 12px 8px;border-top:1px solid var(--b1)}
+/* Legacy refs kept */
+.di-main{display:flex;align-items:center;gap:10px;padding:12px 12px 8px}
+.di-dot2{width:8px;height:8px;border-radius:50%;flex:0 0 8px}
+.di-body{flex:1;min-width:0}.di-meta{font-size:.74rem;color:var(--t2);display:flex;flex-wrap:wrap;gap:4px;margin-top:3px}
+.di-right{display:flex;align-items:center;gap:6px;flex-shrink:0}
+.di-amount{font-size:.95rem;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
 /* Legacy aliases – kept for any remaining refs */
 .debt-item{background:var(--card);border:1px solid var(--b1);border-left:3px solid transparent;border-radius:var(--r-md);margin-bottom:8px}
 .debt-item.pend{border-left-color:rgba(248,113,113,.55)}
@@ -1271,21 +1281,16 @@ function homeHTML(t){
         <div style="font-size:1.8rem;margin-bottom:8px;opacity:.2">🎉</div>
         <div style="font-size:.9rem;font-weight:500;color:var(--t1)">Todo pagado este período</div>
       </div>`:pend.slice(0,5).map(d=>`<div class="di pend">
-        <div class="di-main">
-          <div class="di-dot" style="background:rgba(248,113,113,.6)"></div>
-          <div class="di-body">
-            <div class="di-name">${esc(d.concepto)}</div>
-            <div class="di-meta">
-              ${d.acreedor?`<span>${esc(d.acreedor)}</span><span style="opacity:.3">·</span>`:''}
-              ${d._inst?`<span>Cuota <strong style="color:var(--t1)">${d._inst.num}/${d._inst.total}</strong></span>`:''}
-              ${d.esPrestamo?`<span class="pill" style="background:rgba(167,139,250,.12);color:var(--purple)">Préstamo</span>`:''}
-              ${d.esRecurrente&&!d.esPrestamo?`<span class="pill" style="background:rgba(251,146,60,.1);color:var(--orange)">Recurrente</span>`:''}
-            </div>
+        <div class="di-hd">
+          <div class="di-dot" style="background:rgba(248,113,113,.65)"></div>
+          <div class="di-title">
+            <span class="di-name">${esc(d.concepto)}</span>
+            <span class="di-sub">${d.acreedor?esc(d.acreedor):''}${d._inst?` · Cuota ${d._inst.num}/${d._inst.total}`:''}</span>
           </div>
-          <div class="di-right">
-            <div class="di-amount" style="color:var(--red)">${$m(d.monto)}</div>
-            <button class="pay-btn btn-xs" onclick="openPayModal('${d.id}','${d._key||''}')">Pagar</button>
-          </div>
+          <div class="di-amt" style="color:var(--red)">${$m(d.monto)}</div>
+        </div>
+        <div class="di-foot">
+          <button class="pay-btn" onclick="openPayModal('${d.id}','${d._key||''}')">💳 Pagar</button>
         </div>
       </div>`).join('')}
       ${pend.length>5?`<p style="text-align:center;font-size:.78rem;color:var(--t2);padding:10px 0;cursor:pointer" onclick="switchTab('pagos')">+${pend.length-5} más pendientes →</p>`:''}
@@ -1357,84 +1362,83 @@ function pagosHTML(t){
   const pend=t.deu.filter(d=>!d.paid).sort((a,b)=>b.monto-a.monto);
   const paid=t.deu.filter(d=>d.paid).sort((a,b)=>b.monto-a.monto);
   const pctDone=t.tD>0?pct(t.tPaid,t.tD):0;
-  const p=S.period;
+
+  const pill=(txt,color,bg)=>`<span class="pill" style="background:${bg};color:${color};font-size:.68rem;padding:2px 7px">${txt}</span>`;
 
   const debtCard=(d,isPaid)=>`<div class="di ${isPaid?'done':'pend'}">
-    <div class="di-main">
-      <div class="di-dot" style="background:${isPaid?'var(--green)':'rgba(248,113,113,.6)'}"></div>
-      <div class="di-body">
-        <div class="di-name${isPaid?' crossed':''}">${esc(d.concepto)}</div>
-        <div class="di-meta">
-          ${d.acreedor?`<span>${esc(d.acreedor)}</span><span style="opacity:.3">·</span>`:''}
-          ${d._inst?`<span>Cuota <strong style="color:var(--t1)">${d._inst.num}/${d._inst.total}</strong></span><span style="opacity:.3">·</span>`:''}
-          ${d.esPrestamo?`<span class="pill" style="background:rgba(167,139,250,.12);color:var(--purple)">Préstamo mensual</span>`:''}
-          ${d.esRecurrente&&!d.esPrestamo?`<span class="pill" style="background:rgba(251,146,60,.1);color:var(--orange)">${d.freq==='mensual'?'Mensual':'Recurrente'}</span>`:''}
-          ${!d.esPrestamo&&!d.esRecurrente&&d.freq==='mensual'?`<span class="pill" style="background:rgba(201,168,76,.1);color:var(--gold)">Mensual</span>`:''}
-          ${d.cat&&!d.esPrestamo&&!d.esRecurrente?`<span class="pill" style="background:var(--b1);color:var(--t2)">${esc(d.cat)}</span>`:''}
-        </div>
-        ${d._aportado>0?`<div style="display:flex;align-items:center;gap:8px;margin-top:5px;font-size:.74rem">
-          <span style="background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.2);color:var(--green);padding:2px 8px;border-radius:20px;font-weight:500">✓ $${d._aportado.toFixed(2)} apartado en Q1</span>
-          <span style="color:var(--t2)">· Total: ${$m(d._montoTotal)}</span>
-        </div>`:''}
+    <div class="di-hd">
+      <div class="di-dot" style="background:${isPaid?'var(--green)':'rgba(248,113,113,.65)'}"></div>
+      <div class="di-title">
+        <span class="di-name${isPaid?' crossed':''}">${esc(d.concepto)}</span>
+        <span class="di-sub">${[
+          d.acreedor?esc(d.acreedor):'',
+          d._inst?`Cuota ${d._inst.num}/${d._inst.total}`:'',
+          isPaid&&d.fechaPago?`✓ ${d.fechaPago}`:'',
+        ].filter(Boolean).join(' · ')}</span>
       </div>
-      <div class="di-right">
-        <div class="di-amount" style="color:${isPaid?'var(--green)':'var(--red)'}">${$m(d.monto)}</div>
-        ${isPaid
-          ?`<button class="unpay-btn" onclick="unmarkPaid('${d.id}','${d._key||''}',${!!d._virtual})">↺ Desmarcar</button>`
-          :`<button class="pay-btn" onclick="openPayModal('${d.id}','${d._key||''}')">💳 Pagar</button>`}
-        ${!d._virtual?`<button class="ib" onclick="openEditModal('${d.id}')">✎</button><button class="ib ib-del" onclick="showDelModal('${d.id}')">✕</button>`:''}
-      </div>
+      <div class="di-amt" style="color:${isPaid?'var(--green)':'var(--red)'}">${$m(d.monto)}</div>
+    </div>
+    <div class="di-tags">
+      ${d.esPrestamo?pill('Préstamo','var(--purple)','rgba(167,139,250,.12)'):''}
+      ${d.esRecurrente&&!d.esPrestamo?pill(d.freq==='mensual'?'Mensual':'Recurrente','var(--orange)','rgba(251,146,60,.1)'):''}
+      ${d._aportado>0?pill(`✓ $${d._aportado.toFixed(2)} apartado · Total ${$m(d._montoTotal)}`, 'var(--green)', 'rgba(52,211,153,.08)'):''}
     </div>
     ${d._inst&&d._inst.interes>0&&!isPaid?`<div class="di-breakdown">
       <div class="di-bc"><div class="bclbl">Interés</div><div class="bcval" style="color:var(--red)">${$m(d._inst.interes)}</div></div>
       <div class="di-bc"><div class="bclbl">Capital</div><div class="bcval" style="color:var(--blue)">${$m(d._inst.capital)}</div></div>
-      <div class="di-bc"><div class="bclbl">Saldo restante</div><div class="bcval" style="color:var(--t1)">${$m(d._inst.saldoDespues)}</div></div>
+      <div class="di-bc"><div class="bclbl">Saldo</div><div class="bcval" style="color:var(--t1)">${$m(d._inst.saldoDespues)}</div></div>
     </div>`:''}
-    ${isPaid&&(d.fechaPago||d.notaPago)?`<div class="di-note">${d.fechaPago?`Pagado el ${d.fechaPago}`:''}${d.notaPago?` · ${esc(d.notaPago)}`:''}</div>`:''}
+    <div class="di-foot">
+      ${!d._virtual?`<button class="ib" onclick="openEditModal('${d.id}')">✎</button><button class="ib ib-del" onclick="showDelModal('${d.id}')">✕</button>`:''}
+      ${isPaid
+        ?`<button class="unpay-btn" onclick="unmarkPaid('${d.id}','${d._key||''}',${!!d._virtual})">↺ Desmarcar</button>`
+        :`<button class="pay-btn" onclick="openPayModal('${d.id}','${d._key||''}')">💳 Pagar</button>`}
+    </div>
   </div>`;
 
   return `
-  ${periodBarHTML(`<div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">
-    <button class="btn btn-ghost btn-sm" onclick="openAddModal('deuda','simple')">+ Deuda</button>
-    <button class="btn btn-ghost btn-sm" onclick="openAddModal('deuda','prestamo')" style="color:var(--purple)">+ Préstamo</button>
-  </div>`)}
+  ${periodBarHTML()}
 
-  <!-- Stats row -->
-  <div class="three-col" style="margin-bottom:20px">
+  <!-- Stats: 2 cards top, full width below -->
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
     <div class="card pad-sm" style="border-top:2px solid var(--red)">
-      <div style="font-size:.68rem;color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Por pagar</div>
-      <div style="font-size:1.4rem;font-weight:700;color:var(--red);font-variant-numeric:tabular-nums">${$m(t.tPend)}</div>
-      <div style="font-size:.72rem;color:var(--t2)">${pend.length} obligación${pend.length!==1?'es':''}</div>
+      <div class="sc-lbl">Por pagar</div>
+      <div style="font-size:1.2rem;font-weight:700;color:var(--red);font-variant-numeric:tabular-nums">${$m(t.tPend)}</div>
+      <div class="sc-sub">${pend.length} pendiente${pend.length!==1?'s':''}</div>
     </div>
     <div class="card pad-sm" style="border-top:2px solid var(--green)">
-      <div style="font-size:.68rem;color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Pagado</div>
-      <div style="font-size:1.4rem;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums">${$m(t.tPaid)}</div>
-      <div style="font-size:.72rem;color:var(--t2)">${paid.length} pagado${paid.length!==1?'s':''}</div>
-    </div>
-    <div class="card pad-sm" style="border-top:2px solid ${t.balDisp>=0?'var(--green)':'var(--red)'}">
-      <div style="font-size:.68rem;color:var(--t2);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Disponible actual</div>
-      <div style="font-size:1.4rem;font-weight:700;color:${t.balDisp>=0?'var(--green)':'var(--red)'};font-variant-numeric:tabular-nums">${$m(t.balDisp)}</div>
-      <div style="font-size:.72rem;color:var(--t2)">Ingresos − pagado − ahorros</div>
+      <div class="sc-lbl">Pagado</div>
+      <div style="font-size:1.2rem;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums">${$m(t.tPaid)}</div>
+      <div class="sc-sub">${paid.length} pagado${paid.length!==1?'s':''}</div>
     </div>
   </div>
-
-  ${t.tD>0?`<div class="card pad-sm" style="margin-bottom:20px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-      <span style="font-size:.82rem;font-weight:600;color:var(--t1)">Progreso del período</span>
-      <span style="font-size:.82rem;font-weight:700;color:${pctDone===100?'var(--green)':'var(--orange)'}">${pctDone}% · ${$m(t.tPaid)} de ${$m(t.tD)}</span>
-    </div>
-    <div class="prog prog-lg"><div class="prog-fill" style="width:${pctDone}%;background:${pctDone===100?'var(--green)':'var(--orange)'}"></div></div>
+  ${t.hasSaldo?`<div class="card pad-sm" style="margin-bottom:12px;border-top:2px solid ${t.balDisp>=0?'var(--teal)':'var(--red)'}">
+    <div class="sc-lbl">Disponible ahora</div>
+    <div style="font-size:1.2rem;font-weight:700;color:${t.balDisp>=0?'var(--teal)':'var(--red)'};font-variant-numeric:tabular-nums">${$m(t.balDisp)}</div>
   </div>`:''}
 
-  <div class="two-col">
-    <div>
-      <div style="font-size:.82rem;font-weight:600;color:var(--red);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">⚡ Por pagar · ${$m(t.tPend)}</div>
-      ${pend.length===0?`<div class="card pad" style="text-align:center"><div style="font-size:2rem;opacity:.2;margin-bottom:8px">🎉</div><div style="font-size:.9rem;color:var(--t1);font-weight:500">Todo pagado este período</div></div>`:pend.map(d=>debtCard(d,false)).join('')}
+  ${t.tD>0?`<div class="card pad-sm" style="margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+      <span style="font-size:.8rem;font-weight:600;color:var(--t1)">Progreso</span>
+      <span style="font-size:.8rem;font-weight:700;color:${pctDone===100?'var(--green)':'var(--orange)'}">${pctDone}%</span>
     </div>
-    <div>
-      ${paid.length>0?`<div style="font-size:.82rem;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px">✓ Pagado · ${$m(t.tPaid)}</div>${paid.map(d=>debtCard(d,true)).join('')}`:`<div class="card pad" style="text-align:center;color:var(--t2)"><div class="empty-icon">💳</div><div>Sin pagos registrados aún</div></div>`}
+    <div class="prog prog-lg"><div class="prog-fill" style="width:${pctDone}%;background:${pctDone===100?'var(--green)':'var(--orange)'}"></div></div>
+    <div class="prog-meta"><span>${$m(t.tPaid)} pagado</span><span>${$m(t.tPend)} pendiente</span></div>
+  </div>`:''}
+
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <span style="font-size:.8rem;font-weight:600;color:var(--red);text-transform:uppercase;letter-spacing:.06em">Por pagar</span>
+    <div style="display:flex;gap:6px">
+      <button class="btn btn-ghost btn-xs" onclick="openAddModal('deuda','simple')">+ Deuda</button>
+      <button class="btn btn-ghost btn-xs" onclick="openAddModal('deuda','prestamo')" style="color:var(--purple)">+ Préstamo</button>
     </div>
-  </div>`;
+  </div>
+  ${pend.length===0
+    ?`<div class="card pad" style="text-align:center;margin-bottom:16px"><div style="font-size:2rem;opacity:.18;margin-bottom:8px">🎉</div><div style="font-size:.9rem;color:var(--t1);font-weight:500">Todo pagado este período</div></div>`
+    :pend.map(d=>debtCard(d,false)).join('')}
+
+  ${paid.length>0?`<div style="font-size:.8rem;font-weight:600;color:var(--green);text-transform:uppercase;letter-spacing:.06em;margin:16px 0 10px">✓ Pagado</div>
+  ${paid.map(d=>debtCard(d,true)).join('')}`:''}`;
 }
 
 // ══════════════════════════════════════════
