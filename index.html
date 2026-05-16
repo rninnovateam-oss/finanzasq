@@ -500,30 +500,39 @@ async function marcarApartado(id, pk){
   const e=S.entries.find(x=>x.id===id);if(!e)return;
   if(!e.provisiones)e.provisiones={};
   const yaApartado=!!e.provisiones[pk];
+  const off=mDiff(e.mesInicio,e.añoInicio,S.period.mes,S.period.año);
+  const fullMonto=e.esPrestamo?(getInstallmentAt(e,off)?.cuota||0):e.monto;
+  const provMonto=R2(fullMonto/2);
   if(yaApartado){
-    // Unmark → devuelve el dinero al disponible
     delete e.provisiones[pk];
+    ajustarSaldo(provMonto); // ← devuelve al saldo
     await persist(); renderTab(S.tab);
-    toast('Apartado desmarcado — dinero devuelto al disponible');
+    toast(`Apartado desmarcado — saldo restaurado${getSaldoEntry()?': '+$m(getSaldoActual()):''}`);
   } else {
-    // Check if can afford the provision amount
-    const off=mDiff(e.mesInicio,e.añoInicio,S.period.mes,S.period.año);
-    const fullMonto=e.esPrestamo?(getInstallmentAt(e,off)?.cuota||0):e.monto;
-    const provMonto=R2(fullMonto/2);
     const chk=canAfford(provMonto);
     if(!chk.ok){
       toast(`⚠ Saldo insuficiente para apartar ${$m(provMonto)} — disponible: ${$m(chk.disponible)} (faltan ${$m(chk.deficit)})`,true);
       return;
     }
-    e.provisiones[pk]={apartado:true,fecha:isoToday()};
+    e.provisiones[pk]={apartado:true,fecha:isoToday(),monto:provMonto};
+    ajustarSaldo(-provMonto); // ← descuenta del saldo
     await persist(); renderTab(S.tab);
-    toast(`Apartado ✓ — quedan ${$m(computeTotals().balDisp)} disponibles`);
+    toast(`Apartado ✓${getSaldoEntry()?' — saldo: '+$m(getSaldoActual()):''}`);
   }
 }
 
-// ── Saldo actual ── (único registro, representa el dinero disponible ahora mismo)
+// ══════════════════════════════════════════
+//  SALDO ACUMULATIVO — persiste para siempre, se actualiza con cada acción
+// ══════════════════════════════════════════
 function getSaldoEntry(){ return S.entries.find(e=>e.tipo==='saldo')||null; }
 function getSaldoActual(){ return getSaldoEntry()?.monto||0; }
+
+// Ajusta el saldo en delta: positivo=entra dinero, negativo=sale
+function ajustarSaldo(delta){
+  const e=getSaldoEntry(); if(!e) return;
+  e.monto=R2(e.monto+delta);
+  e.updatedAt=new Date().toISOString();
+}
 
 async function setSaldoActual(monto){
   const existing=getSaldoEntry();
@@ -623,19 +632,20 @@ function computeTotals(){
   const tI=ing.reduce((s,e)=>s+e.monto,0),tA=aho.reduce((s,e)=>s+e.monto,0),tD=deu.reduce((s,e)=>s+e.monto,0);
   const tPaid=deu.filter(d=>d.paid).reduce((s,e)=>s+e.monto,0),tPend=deu.filter(d=>!d.paid).reduce((s,e)=>s+e.monto,0);
   const tApartado=prov.filter(d=>d._apartado).reduce((s,d)=>s+d.monto,0);
-  const saldo=getSaldoActual(),hasSaldo=saldo>0;
-  // balDisp = disponible real ahora (incluye apartados ya comprometidos)
-  const balDisp=hasSaldo?(saldo+tI-tPaid-tA-tApartado):(tI-tPaid-tA-tApartado);
-  const balProy=hasSaldo?(saldo+tI-tD-tA):(tI-tD-tA);
+  const saldo=getSaldoActual(), hasSaldo=getSaldoEntry()!==null;
+  // Con saldo registrado: balDisp = saldo real (ya actualizado por cada acción automáticamente)
+  //                       balProy = cuánto quedaría pagando todo lo pendiente
+  // Sin saldo: cálculo por período (modo básico)
+  const balDisp=hasSaldo?saldo:(tI-tPaid-tA-tApartado);
+  const balProy=hasSaldo?R2(saldo-tPend):(tI-tD-tA);
   return{ing,aho,deu,prov,tI,tA,tD,tPaid,tPend,tApartado,saldo,hasSaldo,balDisp,balProy};
 }
 
-// Returns {ok, disponible, deficit} — only blocks if user has registered saldo
 function canAfford(amount){
   const t=computeTotals();
   if(!t.hasSaldo) return{ok:true,disponible:null,deficit:0};
-  const ok=t.balDisp>=amount;
-  return{ok,disponible:t.balDisp,deficit:R2(amount-t.balDisp)};
+  const ok=t.saldo>=amount;
+  return{ok,disponible:t.saldo,deficit:R2(amount-t.saldo)};
 }
 
 // ══════════════════════════════════════════
@@ -864,9 +874,18 @@ async function saveEntry(){
     f.esRecurrente=false;f.esPrestamo=false;
   }
   const mode=S.modalMode;
-  if(mode==='add')S.entries.push({...f,id:uid(),createdAt:new Date().toISOString()});
-  else{const i=S.entries.findIndex(e=>e.id===f.id);if(i>=0)S.entries[i]={...f};}
-  await persist();closeModal();renderTab(S.tab);toast(mode==='add'?'Registro agregado ✓':'Cambios guardados ✓');
+  if(mode==='add'){
+    S.entries.push({...f,id:uid(),createdAt:new Date().toISOString()});
+    // Auto-actualizar saldo acumulativo
+    if(f.tipo==='ingreso') ajustarSaldo(+f.monto);  // ingreso → saldo sube
+    if(f.tipo==='ahorro')  ajustarSaldo(-f.monto);  // ahorro  → saldo baja (lo apartás)
+  }else{
+    const i=S.entries.findIndex(e=>e.id===f.id);if(i>=0)S.entries[i]={...f};
+  }
+  await persist();closeModal();renderTab(S.tab);
+  const t=computeTotals();
+  const extra=t.hasSaldo&&mode==='add'?` — saldo: ${$m(t.saldo)}`:'';
+  toast((mode==='add'?'Registro agregado ✓':'Cambios guardados ✓')+extra);
 }
 
 async function deleteEntry(id){S.entries=S.entries.filter(e=>e.id!==id);S.pendingDelId=null;document.getElementById('delModal').style.display='none';await persist();renderTab(S.tab);toast('Eliminado');}
@@ -910,21 +929,36 @@ function openPayModal(id,key){
 async function confirmPay(){
   const pp=S.pendingPay;if(!pp)return;
   const nota=document.getElementById('pay-note').value.trim(),fecha=document.getElementById('pay-date').value;
-  if(pp.virtual){const e=S.entries.find(e=>e.id===pp.id);if(!e)return;if(!e.pagos)e.pagos={};e.pagos[pp.key]={pagado:true,fechaPago:fecha,nota};}
+  // Get monto before marking paid (so we can deduct from saldo)
+  const deudas=getDeudas();
+  const d=deudas.find(e=>e.id===pp.id);
+  const montoDeuda=d?.monto||0;
+  if(pp.virtual){const e=S.entries.find(e=>e.id===pp.id);if(!e)return;if(!e.pagos)e.pagos={};e.pagos[pp.key]={pagado:true,fechaPago:fecha,nota,monto:montoDeuda};}
   else{const e=S.entries.find(e=>e.id===pp.id);if(!e)return;e.paid=true;e.notaPago=nota;e.fechaPago=fecha;}
+  ajustarSaldo(-montoDeuda); // ← saldo baja automáticamente
   await persist();closePayModal();renderTab(S.tab);
   const t=computeTotals();
-  toast(`Pago registrado ✓${t.hasSaldo?' — quedan '+$m(t.balDisp)+' disponibles':''}`);
+  toast(`Pago registrado ✓${t.hasSaldo?' — saldo: '+$m(t.saldo):''}`);
 }
 
 function closePayModal(){document.getElementById('payModal').style.display='none';S.pendingPay=null;}
 
 async function unmarkPaid(id,key,virtual){
-  if(virtual){const e=S.entries.find(e=>e.id===id);if(e&&e.pagos&&e.pagos[key])delete e.pagos[key];}
-  else{const e=S.entries.find(e=>e.id===id);if(e){e.paid=false;e.notaPago='';e.fechaPago='';}}
+  let montoRestaurar=0;
+  if(virtual){
+    const e=S.entries.find(e=>e.id===id);
+    if(e&&e.pagos&&e.pagos[key]){
+      montoRestaurar=e.pagos[key].monto||0; // recuperar el monto guardado al pagar
+      delete e.pagos[key];
+    }
+  } else {
+    const e=S.entries.find(e=>e.id===id);
+    if(e){montoRestaurar=e.monto||0;e.paid=false;e.notaPago='';e.fechaPago='';}
+  }
+  ajustarSaldo(montoRestaurar); // ← saldo sube de vuelta
   await persist();renderTab(S.tab);
   const t=computeTotals();
-  toast(`Pago desmarcado${t.hasSaldo?' — disponible: '+$m(t.balDisp):''}`);
+  toast(`Pago desmarcado${t.hasSaldo?' — saldo: '+$m(t.saldo):''}`);
 }
 
 // ══════════════════════════════════════════
